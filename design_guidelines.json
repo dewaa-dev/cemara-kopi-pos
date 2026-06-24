@@ -1,0 +1,209 @@
+{
+  "app_name": "Cemara Kopi POS",
+  "personality": "2 Material You / Expressive (Phone-first POS Utility)",
+  "personality_one_liner": "A premium, smooth, and minimalist coffee shop POS blending Material You's expressive warmth with fist-friendly utility for high-speed transactions.",
+  "color": {
+    "light": {
+      "surface": "#F7F7F7",
+      "onSurface": "#1D1B20",
+      "surfaceSecondary": "#FFFFFF",
+      "onSurfaceSecondary": "#1D1B20",
+      "surfaceTertiary": "#E8E8E8",
+      "onSurfaceTertiary": "#4A4458",
+      "surfaceInverse": "#313033",
+      "onSurfaceInverse": "#F4EFF4",
+      "brand": "#2E7D32",
+      "brandPrimary": "#2E7D32",
+      "onBrandPrimary": "#FFFFFF",
+      "brandSecondary": "#4E342E",
+      "onBrandSecondary": "#FFFFFF",
+      "brandTertiary": "#D4A017",
+      "onBrandTertiary": "#FFFFFF",
+      "success": "#146C2E",
+      "onSuccess": "#FFFFFF",
+      "warning": "#855000",
+      "onWarning": "#FFFFFF",
+      "error": "#BA1A1A",
+      "onError": "#FFFFFF",
+      "info": "#00639B",
+      "onInfo": "#FFFFFF",
+      "border": "#E0E0E0",
+      "borderStrong": "#BDBDBD",
+      "divider": "#EEEEEE"
+    },
+    "dark": {
+      "surface": "#141218",
+      "onSurface": "#E6E0E9",
+      "surfaceSecondary": "#211F26",
+      "onSurfaceSecondary": "#E6E0E9",
+      "surfaceTertiary": "#36343B",
+      "onSurfaceTertiary": "#CAC4D0",
+      "surfaceInverse": "#E6E0E9",
+      "onSurfaceInverse": "#313033",
+      "brand": "#81C784",
+      "brandPrimary": "#81C784",
+      "onBrandPrimary": "#00390A",
+      "brandSecondary": "#BCAAA4",
+      "onBrandSecondary": "#3E2723",
+      "brandTertiary": "#FFE082",
+      "onBrandTertiary": "#412D00",
+      "success": "#81C995",
+      "onSuccess": "#00391C",
+      "warning": "#FFB74D",
+      "onWarning": "#4B2C00",
+      "error": "#FFB4AB",
+      "onError": "#690005",
+      "info": "#81D4FA",
+      "onInfo": "#00344F",
+      "border": "#49454F",
+      "borderStrong": "#938F99",
+      "divider": "#332D41"
+    }
+  },
+  "typography": {
+    "displayFontFamily": "Plus Jakarta Sans",
+    "textFontFamily": "Figtree",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Generous touch targets (min 44pt). Use md (12pt) for internal card padding, lg (16pt) for screen margins. Tonal spacing > hard borders.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 8,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": 2,
+  "navigation": "drawer",
+  "icon_set": "MaterialCommunityIcons",
+  "glassmorphism": {
+    "enabled": false,
+    "do's": ["Use tonal layering and soft shadows instead of blur, matching the Material You aesthetic requested."],
+    "dont's": ["Do not use blur layers, rely on surfaceSecondary/surfaceTertiary and elevation."]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "solid surfaceSecondary",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Login",
+      "purpose": "Secure entry point for Admin/Kasir with an elegant coffee shop vibe.",
+      "states": {
+        "loading": "Centered brand-colored spinner with 'Menyiapkan sistem...'",
+        "empty": "N/A",
+        "error": "Standard Material Snackbar for invalid credentials."
+      },
+      "layout": "Fullscreen background image (blurred interior) layered with a gradient scrim (top to bottom). A bottom-aligned auth card (surfaceSecondary) containing large, fist-friendly inputs for PIN/Password and a prominent brandPrimary login CTA with android_ripple."
+    },
+    {
+      "name": "Dashboard",
+      "purpose": "Overview of KPIs, sales charts, and top products for Admin.",
+      "states": {
+        "loading": "Skeleton loaders for KPI cards and chart area.",
+        "empty": "Illustration of an empty store with 'Belum ada transaksi hari ini'.",
+        "error": "Error state inside the chart card with a 'Coba Lagi' button."
+      },
+      "layout": "Scrollable view. Top section with a horizontal scroll of KPI summary cards (surfaceSecondary, soft shadow). Middle section holds the main Sales Chart (react-native-chart-kit). Bottom section lists Top Products using standard list items with leading product avatars."
+    },
+    {
+      "name": "Cashier (POS)",
+      "purpose": "High-speed checkout screen for adding items, selecting toppings, and processing payments.",
+      "states": {
+        "loading": "Grid skeleton for products.",
+        "empty": "Empty cart uses an icon and 'Keranjang kosong' text inside the bottom sheet.",
+        "error": "Toast/Snackbar for failed actions (e.g., failed to add to cart)."
+      },
+      "layout": "Phone-first utility layout. Top: Sticky horizontal category chips (Minuman/Camilan/Mie/Topping) wrapping multiple rows. Middle: 2-column grid of product cards. Each card has a large image, bold title, and price. Tapping a product with toppings triggers a fast Bottom Sheet for customization. Bottom: A sticky CTA bar ('X Items • Rp Total') that, when swiped up or tapped, expands via @gorhom/bottom-sheet to reveal the full Cart, Discount input, and Payment Method selectors (Tunai/QRIS/Transfer/E-Wallet). The 'Bayar' button is massive and sticky at the bottom of the sheet."
+    },
+    {
+      "name": "Product Master",
+      "purpose": "Manage catalog (Minuman, Camilan, Mie, Topping) and track stock.",
+      "states": {
+        "loading": "List skeleton.",
+        "empty": "Illustration with 'Belum ada produk' and an 'Tambah Produk' CTA.",
+        "error": "Standard error overlay with retry."
+      },
+      "layout": "List view. Each row shows product thumbnail, title, category tag, price, and stock indicator (warning color if low stock). A persistent Floating Action Button (FAB) in brandPrimary at the bottom right for adding new products."
+    },
+    {
+      "name": "Reports",
+      "purpose": "View and export daily/weekly/monthly sales data.",
+      "states": {
+        "loading": "Table/List skeleton.",
+        "empty": "Illustration of empty files with 'Data laporan kosong'.",
+        "error": "Error card with retry."
+      },
+      "layout": "Top section: Date range selectors. Middle: Summary totals. Bottom: List of transactions. Floating sticky CTA 'Ekspor PDF/Excel' at the bottom."
+    },
+    {
+      "name": "Settings",
+      "purpose": "Configure store identity, theme, printer, and tax.",
+      "states": {
+        "loading": "List skeleton.",
+        "empty": "N/A",
+        "error": "Snackbar for save failures."
+      },
+      "layout": "Standard Material settings list. Grouped by sections: Store Info, POS (Tax/Printer), Theme (Light/Dark mode toggle using Segmented Buttons). Printer config includes a Bluetooth discovery modal."
+    }
+  ],
+  "images": {
+    "login_background": {
+      "url": "https://images.pexels.com/photos/31150088/pexels-photo-31150088.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "dark": "https://images.pexels.com/photos/31124637/pexels-photo-31124637.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Minimalist coffee shop interior blurred background"
+    },
+    "placeholder_coffee": {
+      "url": "https://images.pexels.com/photos/35229818/pexels-photo-35229818.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Iced coffee in clear glass"
+    },
+    "placeholder_noodle": {
+      "url": "https://images.pexels.com/photos/15274935/pexels-photo-15274935.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Fried noodle plate"
+    },
+    "placeholder_snack": {
+      "url": "https://images.pexels.com/photos/16192282/pexels-photo-16192282.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Croissant pastry"
+    }
+  },
+  "haptics": {
+    "login_success": "notification_success",
+    "add_to_cart": "impact_light",
+    "remove_from_cart": "impact_light",
+    "checkout_complete": "notification_success",
+    "category_switch": "selection",
+    "bottom_sheet_snap": "impact_medium"
+  },
+  "instructions_to_main_agent": [
+    "Strictly adhere to the exact color palette requested: Primary #2E7D32, Secondary #4E342E, Accent #D4A017, and Background #F7F7F7. Do not introduce any blue or purple tokens.",
+    "Implement 'Ripple Effect' heavily on Android using standard Pressable android_ripple prop for all buttons and list items.",
+    "Implement 'Hero Animation' using react-native-reanimated for transitioning from a product card on the Cashier screen to the topping customization modal/sheet.",
+    "Cashier screen MUST be thumb-friendly: The bottom cart summary should be a sticky bar that can be pulled up (using @gorhom/bottom-sheet) into a full checkout view, avoiding navigation away from the catalog.",
+    "Use Material Design 3 guidelines: elevated cards (shadow_tier: 2), large rounded corners (radius_tokens: lg), and distinct surface color layers.",
+    "Include an interactive Bluetooth modal placeholder within Settings for thermal printing.",
+    "Images MUST use the provided Unsplash/Pexels URLs via expo-image. Apply the mandatory top-to-bottom gradient scrim (transparent to surfaceInverse) over the login background image.",
+    "Ensure Dark Mode dynamically maps colors without breaking contrast limits."
+  ]
+}
