@@ -74,6 +74,14 @@ export default function More() {
       color: "#6B6873",
       adminOnly: true,
     },
+    {
+      key: "printer",
+      label: "Printer Bluetooth",
+      desc: "Thermal 58mm / 80mm",
+      icon: "printer-pos",
+      route: "/(app)/printer",
+      color: "#0066CC",
+    },
   ];
 
   const visible = items.filter((it) => isAdmin || !it.adminOnly);

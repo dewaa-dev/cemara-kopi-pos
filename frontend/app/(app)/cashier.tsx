@@ -823,7 +823,49 @@ const RowKV = ({ k, v, highlight }: { k: string; v: string; highlight?: boolean 
 
 const ReceiptView = ({ data, onClose }: { data: any; onClose: () => void }) => {
   const c = COLORS.light;
+  const toast = useToast();
+  const [printing, setPrinting] = useState(false);
   if (!data) return null;
+
+  const onPrint = async () => {
+    try {
+      const { printReceipt, getDefaultPrinter } = await import("@/src/services/bluetoothPrinter");
+      const def = await getDefaultPrinter();
+      const paper = def?.paperSize ?? "58mm";
+      setPrinting(true);
+      const r = await printReceipt(
+        {
+          storeName: data.store,
+          invoiceCode: data.code,
+          dateTime: new Date(data.date).toLocaleString("id-ID"),
+          cashierName: data.cashier,
+          customerName: data.customer_name,
+          paymentMethod: data.payment_method,
+          lines: data.cart.map((l: CartLine) => ({
+            productName: l.productName,
+            qty: l.qty,
+            price: l.price,
+            toppings: l.toppings.map((t) => ({ productName: t.productName, qty: t.qty, price: t.price })),
+          })),
+          subtotal: data.subtotal,
+          discount: data.discount,
+          tax: data.tax,
+          total: data.total,
+          paid: data.paid,
+          change: data.change,
+          footer: "Terima kasih telah berkunjung. Semoga harimu menyenangkan",
+        },
+        paper
+      );
+      setPrinting(false);
+      if (r.ok) toast.show("Struk dicetak", "success");
+      else toast.show(r.error ?? "Gagal cetak", "error");
+    } catch (e: any) {
+      setPrinting(false);
+      toast.show("Gagal cetak: " + (e?.message || ""), "error");
+    }
+  };
+
   return (
     <View style={styles.modalBg}>
       <View style={[styles.modalSheet, { backgroundColor: c.surface, maxHeight: "92%" }]}>
@@ -874,14 +916,32 @@ const ReceiptView = ({ data, onClose }: { data: any; onClose: () => void }) => {
             Terima kasih telah berkunjung.{"\n"}Semoga harimu menyenangkan ☕
           </Text>
         </View>
-        <Pressable
-          testID="receipt-close"
-          onPress={onClose}
-          style={[styles.modalCta, { backgroundColor: c.brand }]}
-          android_ripple={{ color: "rgba(255,255,255,0.18)" }}
-        >
-          <Text style={styles.modalCtaText}>Tutup & Transaksi Baru</Text>
-        </Pressable>
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <Pressable
+            testID="receipt-print"
+            onPress={onPrint}
+            disabled={printing}
+            style={[styles.modalCta, { flex: 1, backgroundColor: c.accent, opacity: printing ? 0.6 : 1 }]}
+            android_ripple={{ color: "rgba(255,255,255,0.18)" }}
+          >
+            {printing ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                <MaterialCommunityIcons name="printer" size={18} color="#fff" />
+                <Text style={styles.modalCtaText}>Cetak</Text>
+              </View>
+            )}
+          </Pressable>
+          <Pressable
+            testID="receipt-close"
+            onPress={onClose}
+            style={[styles.modalCta, { flex: 1.4, backgroundColor: c.brand }]}
+            android_ripple={{ color: "rgba(255,255,255,0.18)" }}
+          >
+            <Text style={styles.modalCtaText}>Selesai</Text>
+          </Pressable>
+        </View>
       </View>
     </View>
   );

@@ -83,6 +83,7 @@ export default function AppLayout() {
       <Tabs.Screen name="backup" options={{ href: null }} />
       <Tabs.Screen name="dbhealth" options={{ href: null }} />
       <Tabs.Screen name="settings" options={{ href: null }} />
+      <Tabs.Screen name="printer" options={{ href: null }} />
     </Tabs>
   );
 }
