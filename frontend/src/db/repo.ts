@@ -39,6 +39,10 @@ export type Transaction = {
   payment_method: string;
   cashier_id: string;
   cashier_name: string;
+  status: "NORMAL" | "VOID";
+  voided_at: string | null;
+  voided_by: string | null;
+  void_reason: string | null;
   created_at: string;
 };
 
@@ -199,7 +203,8 @@ export async function createTransaction(params: {
 }): Promise<{ id: string; code: string; total: number; subtotal: number; tax: number; change: number }> {
   const d = await getDb();
   const id = `tx_${uid()}`;
-  const code = `INV-${new Date().getTime().toString().slice(-8)}`;
+  const now = new Date();
+  const yyyymmdd = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
   let subtotal = 0;
   params.cart.forEach((c) => {
     subtotal += c.price * c.qty;
@@ -210,10 +215,28 @@ export async function createTransaction(params: {
   const total = afterDisc + tax;
   const change = Math.max(0, params.paid - total);
 
+  let code = "";
+
   await d.withTransactionAsync(async () => {
+    // Generate atomic daily-reset invoice code: CK-YYYYMMDD-XXXX
     await d.runAsync(
-      `INSERT INTO transactions (id,code,customer_name,table_no,note,subtotal,discount,tax,total,paid,change_amount,payment_method,cashier_id,cashier_name,created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      "INSERT OR IGNORE INTO invoice_counters (date, seq) VALUES (?, 0)",
+      [yyyymmdd]
+    );
+    await d.runAsync(
+      "UPDATE invoice_counters SET seq = seq + 1 WHERE date = ?",
+      [yyyymmdd]
+    );
+    const row = await d.getFirstAsync<{ seq: number }>(
+      "SELECT seq FROM invoice_counters WHERE date = ?",
+      [yyyymmdd]
+    );
+    const seq = row?.seq ?? 1;
+    code = `CK-${yyyymmdd}-${String(seq).padStart(4, "0")}`;
+
+    await d.runAsync(
+      `INSERT INTO transactions (id,code,customer_name,table_no,note,subtotal,discount,tax,total,paid,change_amount,payment_method,cashier_id,cashier_name,status,created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         id,
         code,
@@ -229,7 +252,8 @@ export async function createTransaction(params: {
         params.payment_method,
         params.cashier_id,
         params.cashier_name,
-        new Date().toISOString(),
+        "NORMAL",
+        now.toISOString(),
       ]
     );
 
@@ -286,6 +310,8 @@ export async function listTransactions(opts?: {
   from?: string;
   to?: string;
   limit?: number;
+  status?: "NORMAL" | "VOID" | "all";
+  search?: string;
 }): Promise<Transaction[]> {
   const d = await getDb();
   const where: string[] = [];
@@ -298,11 +324,58 @@ export async function listTransactions(opts?: {
     where.push("created_at <= ?");
     args.push(opts.to);
   }
+  if (opts?.status && opts.status !== "all") {
+    where.push("status = ?");
+    args.push(opts.status);
+  }
+  if (opts?.search && opts.search.trim()) {
+    where.push("(LOWER(code) LIKE ? OR LOWER(customer_name) LIKE ?)");
+    args.push(`%${opts.search.toLowerCase()}%`, `%${opts.search.toLowerCase()}%`);
+  }
   const w = where.length ? `WHERE ${where.join(" AND ")}` : "";
   return d.getAllAsync<Transaction>(
     `SELECT * FROM transactions ${w} ORDER BY created_at DESC LIMIT ?`,
     [...args, opts?.limit ?? 500]
   );
+}
+
+export async function voidTransaction(params: {
+  transactionId: string;
+  reason: string;
+  voidedBy: string;
+  voidedByName: string;
+}): Promise<void> {
+  const d = await getDb();
+  await d.withTransactionAsync(async () => {
+    // Restore stock
+    const items = await d.getAllAsync<TxItem>(
+      "SELECT * FROM transaction_items WHERE transaction_id=?",
+      [params.transactionId]
+    );
+    for (const it of items) {
+      await d.runAsync("UPDATE products SET stock = stock + ? WHERE id=?", [
+        it.qty,
+        it.product_id,
+      ]);
+    }
+    await d.runAsync(
+      "UPDATE transactions SET status='VOID', voided_at=?, voided_by=?, void_reason=? WHERE id=?",
+      [new Date().toISOString(), params.voidedByName, params.reason, params.transactionId]
+    );
+    // Audit log
+    await d.runAsync(
+      "INSERT INTO audit_log (id,user_id,user_name,action,entity,detail,created_at) VALUES (?,?,?,?,?,?,?)",
+      [
+        `audit_${uid()}`,
+        params.voidedBy,
+        params.voidedByName,
+        "void_transaction",
+        `transaction:${params.transactionId}`,
+        params.reason,
+        new Date().toISOString(),
+      ]
+    );
+  });
 }
 
 export async function getTransactionItems(txId: string): Promise<TxItem[]> {
@@ -330,21 +403,22 @@ export async function dashboardSummary(): Promise<{
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 
   const today = await d.getFirstAsync<{ c: number; rev: number }>(
-    "SELECT COUNT(*) c, COALESCE(SUM(total),0) rev FROM transactions WHERE created_at >= ?",
+    "SELECT COUNT(*) c, COALESCE(SUM(total),0) rev FROM transactions WHERE status='NORMAL' AND created_at >= ?",
     [startOfDay]
   );
   const week = await d.getFirstAsync<{ rev: number }>(
-    "SELECT COALESCE(SUM(total),0) rev FROM transactions WHERE created_at >= ?",
+    "SELECT COALESCE(SUM(total),0) rev FROM transactions WHERE status='NORMAL' AND created_at >= ?",
     [startOf7]
   );
   const month = await d.getFirstAsync<{ rev: number }>(
-    "SELECT COALESCE(SUM(total),0) rev FROM transactions WHERE created_at >= ?",
+    "SELECT COALESCE(SUM(total),0) rev FROM transactions WHERE status='NORMAL' AND created_at >= ?",
     [startOfMonth]
   );
   const top = await d.getAllAsync<{ name: string; qty: number }>(
     `SELECT product_name as name, SUM(qty) as qty
-     FROM transaction_items
-     WHERE is_topping = 0
+     FROM transaction_items ti
+     INNER JOIN transactions t ON ti.transaction_id = t.id
+     WHERE ti.is_topping = 0 AND t.status = 'NORMAL'
      GROUP BY product_id
      ORDER BY qty DESC
      LIMIT 5`
@@ -355,7 +429,7 @@ export async function dashboardSummary(): Promise<{
   const daily = await d.getAllAsync<{ date: string; total: number }>(
     `SELECT substr(created_at,1,10) as date, SUM(total) as total
      FROM transactions
-     WHERE created_at >= ?
+     WHERE status='NORMAL' AND created_at >= ?
      GROUP BY substr(created_at,1,10)
      ORDER BY date ASC`,
     [startOf7]

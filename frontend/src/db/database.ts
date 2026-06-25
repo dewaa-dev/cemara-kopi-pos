@@ -60,6 +60,10 @@ async function migrate(d: SQLite.SQLiteDatabase) {
       payment_method TEXT NOT NULL,
       cashier_id TEXT NOT NULL,
       cashier_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'NORMAL',
+      voided_at TEXT,
+      voided_by TEXT,
+      void_reason TEXT,
       created_at TEXT NOT NULL
     );
 
@@ -116,10 +120,39 @@ async function migrate(d: SQLite.SQLiteDatabase) {
 
     CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_id);
     CREATE INDEX IF NOT EXISTS idx_tx_created ON transactions(created_at);
+    CREATE INDEX IF NOT EXISTS idx_tx_status ON transactions(status);
     CREATE INDEX IF NOT EXISTS idx_tx_items_tx ON transaction_items(transaction_id);
     CREATE INDEX IF NOT EXISTS idx_cash_created ON cash_flow(created_at);
     CREATE INDEX IF NOT EXISTS idx_drafts_status ON draft_orders(status);
+
+    CREATE TABLE IF NOT EXISTS invoice_counters (
+      date TEXT PRIMARY KEY,
+      seq INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id TEXT PRIMARY KEY,
+      user_id TEXT,
+      user_name TEXT,
+      action TEXT NOT NULL,
+      entity TEXT,
+      detail TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
   `);
+
+  // ALTER TABLE migrations for existing databases (idempotent)
+  const altered = async (sql: string) => {
+    try {
+      await d.execAsync(sql);
+    } catch {}
+  };
+  await altered(`ALTER TABLE transactions ADD COLUMN status TEXT NOT NULL DEFAULT 'NORMAL'`);
+  await altered(`ALTER TABLE transactions ADD COLUMN voided_at TEXT`);
+  await altered(`ALTER TABLE transactions ADD COLUMN voided_by TEXT`);
+  await altered(`ALTER TABLE transactions ADD COLUMN void_reason TEXT`);
 }
 
 async function seedIfEmpty(d: SQLite.SQLiteDatabase) {
