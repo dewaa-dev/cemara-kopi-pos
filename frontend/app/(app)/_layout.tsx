@@ -35,7 +35,7 @@ export default function AppLayout() {
         name="cashier"
         options={{
           title: "Kasir",
-          tabBarIcon: ({ color }) => (
+          tabBarIcon: () => (
             <View
               style={{
                 width: 52,
@@ -76,6 +76,13 @@ export default function AppLayout() {
           ),
         }}
       />
+      {/* Hidden routes (accessed from More hub) */}
+      <Tabs.Screen name="reports" options={{ href: null }} />
+      <Tabs.Screen name="cashflow" options={{ href: null }} />
+      <Tabs.Screen name="drafts" options={{ href: null }} />
+      <Tabs.Screen name="backup" options={{ href: null }} />
+      <Tabs.Screen name="dbhealth" options={{ href: null }} />
+      <Tabs.Screen name="settings" options={{ href: null }} />
     </Tabs>
   );
 }

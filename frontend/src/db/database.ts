@@ -81,9 +81,44 @@ async function migrate(d: SQLite.SQLiteDatabase) {
       value TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS cash_flow (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      category TEXT NOT NULL,
+      amount REAL NOT NULL,
+      note TEXT,
+      user_id TEXT,
+      user_name TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS draft_orders (
+      id TEXT PRIMARY KEY,
+      customer_name TEXT NOT NULL,
+      phone TEXT,
+      note TEXT,
+      total REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'draft',
+      cart_json TEXT NOT NULL,
+      cashier_id TEXT,
+      cashier_name TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS backups (
+      id TEXT PRIMARY KEY,
+      file_name TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_id);
     CREATE INDEX IF NOT EXISTS idx_tx_created ON transactions(created_at);
     CREATE INDEX IF NOT EXISTS idx_tx_items_tx ON transaction_items(transaction_id);
+    CREATE INDEX IF NOT EXISTS idx_cash_created ON cash_flow(created_at);
+    CREATE INDEX IF NOT EXISTS idx_drafts_status ON draft_orders(status);
   `);
 }
 

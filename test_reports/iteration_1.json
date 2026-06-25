@@ -1,0 +1,35 @@
+{
+  "summary": "Frontend-only static + web-render verification for Cemara Kopi POS (offline-first Expo + SQLite). BUG FIX VERIFIED: /(app)/more.tsx fully rewritten as a 2-column hub grid using the new ScreenHeader component (left-aligned title via SafeAreaView edges=['top']) — no centered/misaligned layout. ALL 5 NEW SCREENS EXIST WITH CORRECT testIDs: cashflow, drafts, backup, dbhealth, settings, reports. _layout.tsx correctly registers all 6 hidden tabs (href:null). Cashier has checkout-save-draft + checkout-customer-phone. Android bundle compiles successfully (1699 modules, 11.3s — 'Android Bundled 11296ms'). Login screen renders on web preview (background, form, Masuk button visible). Lint: 5 warnings only, 0 errors. expo-sqlite WASM worker fails on web (expected — feature works only on native Android/Expo Go as called out by main agent). Minor React Native deprecation warnings observed in console (shadow* props, pointerEvents prop, TouchableWithoutFeedback) — likely from theme SHADOW objects / RN-web internals.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "Console deprecation: shadow* style props", "issue": "RN-web warns 'shadow*' style props are deprecated, use boxShadow. Likely from /app/frontend/src/theme.ts SHADOW.card object (shadowColor/shadowOffset/shadowOpacity/shadowRadius). Not blocking on Android (still uses elevation+shadow*), but cleanup recommended for web parity. Reference: /app/frontend/src/theme.ts"},
+      {"component": "Console deprecation: props.pointerEvents", "issue": "Warning 'props.pointerEvents is deprecated. Use style.pointerEvents'. Likely from a third-party component or RN-web internal — should be checked across screens if any direct usage exists."},
+      {"component": "Console deprecation: TouchableWithoutFeedback", "issue": "Warning 'TouchableWithoutFeedback is deprecated. Please use Pressable.' Search for any TouchableWithoutFeedback in /app/frontend/app and /app/frontend/src and migrate to Pressable."},
+      {"component": "Expo SDK version drift", "issue": "expo@54.0.34 (expected ~54.0.35), expo-font@14.0.11 (~14.0.12), expo-router@6.0.23 (~6.0.24). Bundle still compiles but `npx expo install --check` recommended."}
+    ]
+  },
+  "test_report_links": ["/app/test_reports/iteration_1.json"],
+  "action_items": [
+    "Optional: remove unused imports flagged by lint — backup.tsx (FONT, e), ScreenHeader.tsx (RADII, SHADOW), src/db/extras.ts (dir). Warnings only.",
+    "Optional: Migrate theme SHADOW to boxShadow for web parity or accept warnings (Android-only release is fine as-is).",
+    "Optional: Run `npx expo install --check` then `yarn install` to align expo/expo-font/expo-router patch versions.",
+    "Real end-to-end testing of login/dashboard/cashier/cashflow/drafts/backup/dbhealth/settings/reports/PDF/CSV export and SQLCipher requires Expo Go on a physical Android device — web preview cannot exercise SQLite-backed flows."
+  ],
+  "critical_code_review_comments": [
+    "ScreenHeader uses SafeAreaView edges=['top'] + LinearGradient + left-aligned title (flex:1) — correctly fixes the prior 'too centered' header bug in the Lainnya tab.",
+    "More screen builds visible hub items by filtering adminOnly when user.role!=='admin' — correct role-based gating (admin sees 6 cards, kasir sees 3: laporan, cashflow, drafts).",
+    "All new screens import the same ScreenHeader and follow consistent layout — good DRY adherence.",
+    "Cashier checkout sheet wires both 'checkout-save-draft' (line 759) and 'checkout-customer-phone' (line 673) as required."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (offline-first, no backend)", "frontend": "100% on static + bundle + web-login checks; native flows not testable in this environment"},
+  "seed_data_creation": "None — SQLite auto-seeds admin/admin123 and kasir/kasir123 on native device init.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "This app is offline-first; expo-sqlite WASM worker fails to load on web preview (expected) so login submission and any data-driven flows can ONLY be tested via Expo Go on a physical Android device. Web preview is limited to: (1) login screen render check, (2) lint, (3) bundle log. Always check /var/log/supervisor/expo.out.log for 'Android Bundled' confirmation. testIDs are wired correctly across all 7 (app) routes — see grep results in iteration_1 notes.",
+  "rca_of_issue": "Original bug ('Lainnya menu display too centered/misaligned') root cause was the prior More screen rendering without a proper header component and relying on default layout that centered the title. Fix: introduced /app/frontend/src/components/ScreenHeader.tsx (LinearGradient + SafeAreaView edges=['top'] + flex:1 Text container giving left-aligned 20px/800-weight white title) and rewrote /app/frontend/app/(app)/more.tsx to use ScreenHeader + a 2-column Pressable grid (47.8% width, 130 min-height, gap SPACING.md). Verified via code inspection — bug fix complete."
+}

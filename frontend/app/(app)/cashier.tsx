@@ -29,6 +29,9 @@ import {
 } from "@/src/db/repo";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { useToast } from "@/src/components/Toast";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { saveDraft, markDraftPaid } from "@/src/db/extras";
+import { DRAFT_LOAD_KEY } from "./drafts";
 
 const PAY_METHODS = [
   { id: "Tunai", icon: "cash" as const },
@@ -58,9 +61,11 @@ export default function Cashier() {
   // checkout state
   const [discount, setDiscount] = useState("0");
   const [customerName, setCustomerName] = useState("");
+  const [phone, setPhone] = useState("");
   const [paid, setPaid] = useState("");
   const [payMethod, setPayMethod] = useState("Tunai");
   const [busy, setBusy] = useState(false);
+  const [loadedDraftId, setLoadedDraftId] = useState<string | null>(null);
 
   const debounceRef = useRef<any>(null);
 
@@ -82,8 +87,24 @@ export default function Cashier() {
         setTaxPercent(parseFloat(sets.tax_percent || "0"));
         setStoreName(sets.store_name || "Cemara Kopi");
         loadProducts(activeCat, search);
+        // Load draft if present
+        const raw = await AsyncStorage.getItem(DRAFT_LOAD_KEY);
+        if (raw) {
+          try {
+            const d = JSON.parse(raw);
+            const cartLoaded = JSON.parse(d.cart_json);
+            if (Array.isArray(cartLoaded)) {
+              setCart(cartLoaded);
+              setCustomerName(d.customer_name ?? "");
+              setPhone(d.phone ?? "");
+              setLoadedDraftId(d.id);
+              toast.show(`Draft ${d.customer_name} dimuat`, "success");
+            }
+          } catch {}
+          await AsyncStorage.removeItem(DRAFT_LOAD_KEY);
+        }
       })();
-    }, [activeCat, search, loadProducts])
+    }, [activeCat, search, loadProducts, toast])
   );
 
   useEffect(() => {
@@ -146,6 +167,33 @@ export default function Cashier() {
         .filter((l) => l.qty > 0)
     );
 
+  const onSaveDraft = async () => {
+    if (!cart.length) {
+      toast.show("Keranjang kosong", "error");
+      return;
+    }
+    if (!customerName.trim()) {
+      toast.show("Isi nama pelanggan dulu", "error");
+      return;
+    }
+    await saveDraft({
+      id: loadedDraftId ?? undefined,
+      customer_name: customerName.trim(),
+      phone: phone || undefined,
+      total,
+      cart_json: JSON.stringify(cart),
+      cashier_id: user?.id,
+      cashier_name: user?.name,
+    });
+    setCart([]);
+    setDiscount("0");
+    setCustomerName("");
+    setPhone("");
+    setLoadedDraftId(null);
+    setShowCheckout(false);
+    toast.show("Draft tersimpan", "success");
+  };
+
   const submitOrder = async () => {
     if (!cart.length) return;
     if (payMethod === "Tunai" && paidVal < total) {
@@ -178,8 +226,13 @@ export default function Cashier() {
       setCart([]);
       setDiscount("0");
       setCustomerName("");
+      setPhone("");
       setPaid("");
       setShowCheckout(false);
+      if (loadedDraftId) {
+        await markDraftPaid(loadedDraftId);
+        setLoadedDraftId(null);
+      }
       toast.show("Transaksi sukses", "success");
     } catch (e: any) {
       toast.show("Gagal: " + (e?.message || "error"), "error");
@@ -351,6 +404,8 @@ export default function Cashier() {
           setDiscount={setDiscount}
           customerName={customerName}
           setCustomerName={setCustomerName}
+          phone={phone}
+          setPhone={setPhone}
           paid={paid}
           setPaid={setPaid}
           payMethod={payMethod}
@@ -359,8 +414,10 @@ export default function Cashier() {
           total={total}
           change={change}
           busy={busy}
+          loadedDraftId={loadedDraftId}
           onClose={() => setShowCheckout(false)}
           onSubmit={submitOrder}
+          onSaveDraft={onSaveDraft}
           incLine={incLine}
           decLine={decLine}
           removeLine={removeLine}
@@ -547,6 +604,8 @@ const CheckoutSheet = (props: any) => {
     setDiscount,
     customerName,
     setCustomerName,
+    phone,
+    setPhone,
     paid,
     setPaid,
     payMethod,
@@ -555,8 +614,10 @@ const CheckoutSheet = (props: any) => {
     total,
     change,
     busy,
+    loadedDraftId,
     onClose,
     onSubmit,
+    onSaveDraft,
     incLine,
     decLine,
     removeLine,
@@ -604,9 +665,18 @@ const CheckoutSheet = (props: any) => {
             testID="checkout-customer-name"
             value={customerName}
             onChangeText={setCustomerName}
-            placeholder="Nama pelanggan (opsional)"
+            placeholder="Nama pelanggan (wajib untuk draft)"
             placeholderTextColor={c.onSurfaceMuted}
             style={[styles.input, { borderColor: c.border, color: c.onSurface }]}
+          />
+          <TextInput
+            testID="checkout-customer-phone"
+            value={phone}
+            onChangeText={setPhone}
+            placeholder="No HP (opsional)"
+            placeholderTextColor={c.onSurfaceMuted}
+            keyboardType="phone-pad"
+            style={[styles.input, { borderColor: c.border, color: c.onSurface, marginTop: 8 }]}
           />
 
           <Text style={[styles.section, { color: c.onSurfaceMuted }]}>Metode Pembayaran</Text>
@@ -684,25 +754,48 @@ const CheckoutSheet = (props: any) => {
           </View>
         </ScrollView>
 
-        <Pressable
-          testID="checkout-pay-button"
-          disabled={busy || cart.length === 0}
-          onPress={onSubmit}
-          android_ripple={{ color: "rgba(255,255,255,0.18)" }}
-          style={[
-            styles.modalCta,
-            {
-              backgroundColor: c.brand,
-              opacity: busy || cart.length === 0 ? 0.6 : 1,
-            },
-          ]}
-        >
-          {busy ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.modalCtaText}>Bayar Sekarang • {formatRp(total)}</Text>
-          )}
-        </Pressable>
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <Pressable
+            testID="checkout-save-draft"
+            disabled={busy || cart.length === 0}
+            onPress={onSaveDraft}
+            android_ripple={{ color: c.brandSoft }}
+            style={[
+              styles.modalCta,
+              {
+                flex: 1,
+                backgroundColor: c.surfaceSecondary,
+                borderWidth: 1.5,
+                borderColor: c.brand,
+                opacity: busy || cart.length === 0 ? 0.6 : 1,
+              },
+            ]}
+          >
+            <Text style={[styles.modalCtaText, { color: c.brand }]}>
+              {loadedDraftId ? "Update Draft" : "Simpan Draft"}
+            </Text>
+          </Pressable>
+          <Pressable
+            testID="checkout-pay-button"
+            disabled={busy || cart.length === 0}
+            onPress={onSubmit}
+            android_ripple={{ color: "rgba(255,255,255,0.18)" }}
+            style={[
+              styles.modalCta,
+              {
+                flex: 1.4,
+                backgroundColor: c.brand,
+                opacity: busy || cart.length === 0 ? 0.6 : 1,
+              },
+            ]}
+          >
+            {busy ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.modalCtaText} numberOfLines={1}>Bayar • {formatRp(total)}</Text>
+            )}
+          </Pressable>
+        </View>
       </View>
     </KeyboardAvoidingView>
   );
