@@ -4,14 +4,14 @@ export const SEED_USERS = [
   {
     id: "user_admin",
     username: "admin",
-    password: "admin123",
+    password: "admincemarakopi..",
     name: "Admin Cemara",
     role: "admin",
   },
   {
     id: "user_kasir",
     username: "kasir",
-    password: "kasir123",
+    password: "kasircemarakopi",
     name: "Kasir Cemara",
     role: "kasir",
   },

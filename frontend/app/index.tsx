@@ -135,7 +135,7 @@ export default function Login() {
             <View style={[styles.hint, { backgroundColor: c.brandSoft }]}>
               <MaterialCommunityIcons name="information-outline" size={14} color={c.brand} />
               <Text style={[styles.hintText, { color: c.brand }]}>
-                Admin: admin / admin123  •  Kasir: kasir / kasir123
+                Admin: admin / ******  •  Kasir: kasir / ******
               </Text>
             </View>
           </View>
