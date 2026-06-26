@@ -44,7 +44,18 @@
           "backgroundColor": "#000000"
         }
       ],
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-dev-client",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "compileSdkVersion": 36,
+            "targetSdkVersion": 36,
+            "minSdkVersion": 24
+          }
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
