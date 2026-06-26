@@ -1,8 +1,16 @@
 diff --git a/node_modules/react-native-bluetooth-classic/android/src/main/java/kjd/reactnative/bluetooth/RNBluetoothClassicModule.java b/node_modules/react-native-bluetooth-classic/android/src/main/java/kjd/reactnative/bluetooth/RNBluetoothClassicModule.java
-index dc0061d..a39d488 100644
+index dc0061d..f9baac8 100644
 --- a/node_modules/react-native-bluetooth-classic/android/src/main/java/kjd/reactnative/bluetooth/RNBluetoothClassicModule.java
 +++ b/node_modules/react-native-bluetooth-classic/android/src/main/java/kjd/reactnative/bluetooth/RNBluetoothClassicModule.java
-@@ -242,7 +242,6 @@ public class RNBluetoothClassicModule
+@@ -228,7 +228,6 @@ public class RNBluetoothClassicModule
+         return MODULE_NAME;
+     }
+ 
+-    @Override
+     public boolean hasConstants() {
+         return true;
+     }
+@@ -242,7 +241,6 @@ public class RNBluetoothClassicModule
       *
       */
      @Nullable

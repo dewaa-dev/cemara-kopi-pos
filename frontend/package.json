@@ -2,6 +2,17 @@
   "name": "frontend",
   "main": "expo-router/entry",
   "version": "1.0.0",
+
+  "expo": {
+    "doctor": {
+      "reactNativeDirectoryCheck": {
+        "exclude": [
+          "react-native-bluetooth-classic"
+        ]
+      }
+    }
+  },
+  
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
