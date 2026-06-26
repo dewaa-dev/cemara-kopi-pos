@@ -1,0 +1,12 @@
+diff --git a/node_modules/react-native-bluetooth-classic/android/src/main/java/kjd/reactnative/bluetooth/RNBluetoothClassicModule.java b/node_modules/react-native-bluetooth-classic/android/src/main/java/kjd/reactnative/bluetooth/RNBluetoothClassicModule.java
+index dc0061d..a39d488 100644
+--- a/node_modules/react-native-bluetooth-classic/android/src/main/java/kjd/reactnative/bluetooth/RNBluetoothClassicModule.java
++++ b/node_modules/react-native-bluetooth-classic/android/src/main/java/kjd/reactnative/bluetooth/RNBluetoothClassicModule.java
+@@ -242,7 +242,6 @@ public class RNBluetoothClassicModule
+      *
+      */
+     @Nullable
+-    @Override
+     public Map<String, Object> getConstants() {
+         return Collections.emptyMap();
+     }
