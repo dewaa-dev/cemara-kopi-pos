@@ -218,7 +218,6 @@ export async function createTransaction(params: {
   let code = "";
 
   await d.withTransactionAsync(async () => {
-    // Generate atomic daily-reset invoice code: CK-YYYYMMDD-XXXX
     await d.runAsync(
       "INSERT OR IGNORE INTO invoice_counters (date, seq) VALUES (?, 0)",
       [yyyymmdd]
@@ -238,20 +237,12 @@ export async function createTransaction(params: {
       `INSERT INTO transactions (id,code,customer_name,table_no,note,subtotal,discount,tax,total,paid,change_amount,payment_method,cashier_id,cashier_name,status,created_at)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
-        id,
-        code,
+        id, code,
         params.customer_name ?? null,
         params.table_no ?? null,
         params.note ?? null,
-        subtotal,
-        params.discount,
-        tax,
-        total,
-        params.paid,
-        change,
-        params.payment_method,
-        params.cashier_id,
-        params.cashier_name,
+        subtotal, params.discount, tax, total, params.paid, change,
+        params.payment_method, params.cashier_id, params.cashier_name,
         "NORMAL",
         now.toISOString(),
       ]
@@ -262,19 +253,8 @@ export async function createTransaction(params: {
       await d.runAsync(
         `INSERT INTO transaction_items (id,transaction_id,product_id,product_name,qty,price,subtotal,parent_item_id,is_topping)
          VALUES (?,?,?,?,?,?,?,?,?)`,
-        [
-          parentId,
-          id,
-          c.productId,
-          c.productName,
-          c.qty,
-          c.price,
-          c.price * c.qty,
-          null,
-          0,
-        ]
+        [parentId, id, c.productId, c.productName, c.qty, c.price, c.price * c.qty, null, 0]
       );
-      // Decrement stock
       await d.runAsync(
         "UPDATE products SET stock = stock - ? WHERE id=?",
         [c.qty, c.productId]
@@ -284,15 +264,8 @@ export async function createTransaction(params: {
           `INSERT INTO transaction_items (id,transaction_id,product_id,product_name,qty,price,subtotal,parent_item_id,is_topping)
            VALUES (?,?,?,?,?,?,?,?,?)`,
           [
-            `txi_${uid()}`,
-            id,
-            t.productId,
-            t.productName,
-            t.qty * c.qty,
-            t.price,
-            t.price * t.qty * c.qty,
-            parentId,
-            1,
+            `txi_${uid()}`, id, t.productId, t.productName,
+            t.qty * c.qty, t.price, t.price * t.qty * c.qty, parentId, 1,
           ]
         );
         await d.runAsync(
@@ -316,18 +289,9 @@ export async function listTransactions(opts?: {
   const d = await getDb();
   const where: string[] = [];
   const args: any[] = [];
-  if (opts?.from) {
-    where.push("created_at >= ?");
-    args.push(opts.from);
-  }
-  if (opts?.to) {
-    where.push("created_at <= ?");
-    args.push(opts.to);
-  }
-  if (opts?.status && opts.status !== "all") {
-    where.push("status = ?");
-    args.push(opts.status);
-  }
+  if (opts?.from) { where.push("created_at >= ?"); args.push(opts.from); }
+  if (opts?.to) { where.push("created_at <= ?"); args.push(opts.to); }
+  if (opts?.status && opts.status !== "all") { where.push("status = ?"); args.push(opts.status); }
   if (opts?.search && opts.search.trim()) {
     where.push("(LOWER(code) LIKE ? OR LOWER(customer_name) LIKE ?)");
     args.push(`%${opts.search.toLowerCase()}%`, `%${opts.search.toLowerCase()}%`);
@@ -347,32 +311,23 @@ export async function voidTransaction(params: {
 }): Promise<void> {
   const d = await getDb();
   await d.withTransactionAsync(async () => {
-    // Restore stock
     const items = await d.getAllAsync<TxItem>(
       "SELECT * FROM transaction_items WHERE transaction_id=?",
       [params.transactionId]
     );
     for (const it of items) {
-      await d.runAsync("UPDATE products SET stock = stock + ? WHERE id=?", [
-        it.qty,
-        it.product_id,
-      ]);
+      await d.runAsync("UPDATE products SET stock = stock + ? WHERE id=?", [it.qty, it.product_id]);
     }
     await d.runAsync(
       "UPDATE transactions SET status='VOID', voided_at=?, voided_by=?, void_reason=? WHERE id=?",
       [new Date().toISOString(), params.voidedByName, params.reason, params.transactionId]
     );
-    // Audit log
     await d.runAsync(
       "INSERT INTO audit_log (id,user_id,user_name,action,entity,detail,created_at) VALUES (?,?,?,?,?,?,?)",
       [
-        `audit_${uid()}`,
-        params.voidedBy,
-        params.voidedByName,
-        "void_transaction",
-        `transaction:${params.transactionId}`,
-        params.reason,
-        new Date().toISOString(),
+        `audit_${uid()}`, params.voidedBy, params.voidedByName,
+        "void_transaction", `transaction:${params.transactionId}`,
+        params.reason, new Date().toISOString(),
       ]
     );
   });
@@ -386,6 +341,8 @@ export async function getTransactionItems(txId: string): Promise<TxItem[]> {
   );
 }
 
+// ─── DASHBOARD ────────────────────────────────────────────────────────────────
+// ─── DASHBOARD ────────────────────────────────────────────────────────────────
 export async function dashboardSummary(): Promise<{
   todayCount: number;
   todayRevenue: number;
@@ -396,23 +353,46 @@ export async function dashboardSummary(): Promise<{
   salesByDay: { date: string; total: number }[];
 }> {
   const d = await getDb();
+  const WIB_OFFSET_MS = 7 * 60 * 60 * 1000;
   const now = new Date();
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-  const sevenDaysAgo = new Date(now.getTime() - 6 * 86400000);
-  const startOf7 = new Date(sevenDaysAgo.getFullYear(), sevenDaysAgo.getMonth(), sevenDaysAgo.getDate()).toISOString();
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+
+  // ✅ FIX: hitung boundary "tengah malam WIB" lalu konversi BALIK ke instant UTC,
+  // dan format sebagai ISO string dengan suffix "Z" (bukan +07:00).
+  // Ini WAJIB supaya perbandingan string lexicographic di SQLite konsisten,
+  // karena created_at di DB juga tersimpan dalam format UTC "Z".
+  // (String "+07:00" vs "Z" TIDAK sortable terhadap satu sama lain meskipun
+  // merepresentasikan instant yang sama — itu bug sebelumnya.)
+  function wibMidnightToUtcIso(localNow: Date, daysOffset: number): string {
+    // geser waktu ke "jam dinding WIB" dengan menambah offset ke UTC time
+    const wibWallClock = new Date(localNow.getTime() + WIB_OFFSET_MS);
+    const y = wibWallClock.getUTCFullYear();
+    const m = wibWallClock.getUTCMonth();
+    const dd = wibWallClock.getUTCDate() + daysOffset;
+    // tengah malam WIB pada tanggal tsb, dikonversi balik ke instant UTC asli
+    const utcInstant = new Date(Date.UTC(y, m, dd, 0, 0, 0) - WIB_OFFSET_MS);
+    return utcInstant.toISOString(); // -> format "...Z", konsisten dgn created_at
+  }
+
+  const startOfDayWIB = wibMidnightToUtcIso(now, 0);
+  const startOf7WIB = wibMidnightToUtcIso(now, -6);
+  const startOfMonthUTC = (() => {
+    const wibWallClock = new Date(now.getTime() + WIB_OFFSET_MS);
+    const y = wibWallClock.getUTCFullYear();
+    const m = wibWallClock.getUTCMonth();
+    return new Date(Date.UTC(y, m, 1, 0, 0, 0) - WIB_OFFSET_MS).toISOString();
+  })();
 
   const today = await d.getFirstAsync<{ c: number; rev: number }>(
     "SELECT COUNT(*) c, COALESCE(SUM(total),0) rev FROM transactions WHERE status='NORMAL' AND created_at >= ?",
-    [startOfDay]
+    [startOfDayWIB]
   );
   const week = await d.getFirstAsync<{ rev: number }>(
     "SELECT COALESCE(SUM(total),0) rev FROM transactions WHERE status='NORMAL' AND created_at >= ?",
-    [startOf7]
+    [startOf7WIB]
   );
   const month = await d.getFirstAsync<{ rev: number }>(
     "SELECT COALESCE(SUM(total),0) rev FROM transactions WHERE status='NORMAL' AND created_at >= ?",
-    [startOfMonth]
+    [startOfMonthUTC]
   );
   const top = await d.getAllAsync<{ name: string; qty: number }>(
     `SELECT product_name as name, SUM(qty) as qty
@@ -426,13 +406,15 @@ export async function dashboardSummary(): Promise<{
   const low = await d.getAllAsync<Product>(
     "SELECT * FROM products WHERE active=1 AND stock <= min_stock ORDER BY stock ASC LIMIT 5"
   );
+
   const daily = await d.getAllAsync<{ date: string; total: number }>(
-    `SELECT substr(created_at,1,10) as date, SUM(total) as total
+    `SELECT substr(datetime(created_at, '+7 hours'), 1, 10) as date,
+            SUM(total) as total
      FROM transactions
      WHERE status='NORMAL' AND created_at >= ?
-     GROUP BY substr(created_at,1,10)
+     GROUP BY substr(datetime(created_at, '+7 hours'), 1, 10)
      ORDER BY date ASC`,
-    [startOf7]
+    [startOf7WIB]
   );
 
   return {

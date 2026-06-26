@@ -11,6 +11,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
@@ -32,6 +33,11 @@ import { useToast } from "@/src/components/Toast";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { saveDraft, markDraftPaid } from "@/src/db/extras";
 import { DRAFT_LOAD_KEY } from "./drafts";
+import {
+  printReceipt,
+  getDefaultPrinter,
+  type PaperSize,
+} from "@/src/services/bluetoothPrinter";
 
 const PAY_METHODS = [
   { id: "Tunai", icon: "cash" as const },
@@ -39,6 +45,13 @@ const PAY_METHODS = [
   { id: "Transfer", icon: "bank-transfer" as const },
   { id: "E-Wallet", icon: "wallet" as const },
 ];
+
+// Icon per kategori
+const getCatIcon = (categoryId: string) => {
+  if (categoryId === "cat_minuman") return "coffee";
+  if (categoryId === "cat_camilan") return "food-drumstick";
+  return "noodles";
+};
 
 export default function Cashier() {
   const c = COLORS.light;
@@ -53,12 +66,10 @@ export default function Cashier() {
   const [taxPercent, setTaxPercent] = useState(0);
   const [storeName, setStoreName] = useState("Cemara Kopi");
 
-  // modals
   const [toppingFor, setToppingFor] = useState<Product | null>(null);
   const [showCheckout, setShowCheckout] = useState(false);
   const [showReceipt, setShowReceipt] = useState<any>(null);
 
-  // checkout state
   const [discount, setDiscount] = useState("0");
   const [customerName, setCustomerName] = useState("");
   const [phone, setPhone] = useState("");
@@ -87,7 +98,6 @@ export default function Cashier() {
         setTaxPercent(parseFloat(sets.tax_percent || "0"));
         setStoreName(sets.store_name || "Cemara Kopi");
         loadProducts(activeCat, search);
-        // Load draft if present
         const raw = await AsyncStorage.getItem(DRAFT_LOAD_KEY);
         if (raw) {
           try {
@@ -127,17 +137,20 @@ export default function Cashier() {
       }
       return [
         ...prev,
-        {
-          productId: p.id,
-          productName: p.name,
-          price: p.sell_price,
-          qty: 1,
-          toppings: [],
-        },
+        { productId: p.id, productName: p.name, price: p.sell_price, qty: 1, toppings: [] },
       ];
     });
     toast.show(`+ ${p.name}`, "success");
   };
+
+  // Hitung qty produk di cart (untuk badge)
+  const cartQtyMap = useMemo(() => {
+    const map: Record<string, number> = {};
+    cart.forEach((l) => {
+      map[l.productId] = (map[l.productId] || 0) + l.qty;
+    });
+    return map;
+  }, [cart]);
 
   const subtotal = useMemo(() => {
     let s = 0;
@@ -156,26 +169,17 @@ export default function Cashier() {
   const change = Math.max(0, paidVal - total);
   const totalItems = cart.reduce((s, l) => s + l.qty, 0);
 
-  const removeLine = (idx: number) =>
-    setCart((p) => p.filter((_, i) => i !== idx));
+  const removeLine = (idx: number) => setCart((p) => p.filter((_, i) => i !== idx));
   const incLine = (idx: number) =>
     setCart((p) => p.map((l, i) => (i === idx ? { ...l, qty: l.qty + 1 } : l)));
   const decLine = (idx: number) =>
     setCart((p) =>
-      p
-        .map((l, i) => (i === idx ? { ...l, qty: l.qty - 1 } : l))
-        .filter((l) => l.qty > 0)
+      p.map((l, i) => (i === idx ? { ...l, qty: l.qty - 1 } : l)).filter((l) => l.qty > 0)
     );
 
   const onSaveDraft = async () => {
-    if (!cart.length) {
-      toast.show("Keranjang kosong", "error");
-      return;
-    }
-    if (!customerName.trim()) {
-      toast.show("Isi nama pelanggan dulu", "error");
-      return;
-    }
+    if (!cart.length) { toast.show("Keranjang kosong", "error"); return; }
+    if (!customerName.trim()) { toast.show("Isi nama pelanggan dulu", "error"); return; }
     await saveDraft({
       id: loadedDraftId ?? undefined,
       customer_name: customerName.trim(),
@@ -185,60 +189,39 @@ export default function Cashier() {
       cashier_id: user?.id,
       cashier_name: user?.name,
     });
-    setCart([]);
-    setDiscount("0");
-    setCustomerName("");
-    setPhone("");
-    setLoadedDraftId(null);
-    setShowCheckout(false);
+    setCart([]); setDiscount("0"); setCustomerName(""); setPhone("");
+    setLoadedDraftId(null); setShowCheckout(false);
     toast.show("Draft tersimpan", "success");
   };
 
   const submitOrder = async () => {
     if (!cart.length) return;
     if (payMethod === "Tunai" && paidVal < total) {
-      toast.show("Nominal pembayaran kurang", "error");
-      return;
+      toast.show("Nominal pembayaran kurang", "error"); return;
     }
     setBusy(true);
     try {
       const res = await createTransaction({
-        cart,
-        discount: discountVal,
-        tax_percent: taxPercent,
+        cart, discount: discountVal, tax_percent: taxPercent,
         paid: payMethod === "Tunai" ? paidVal : total,
-        payment_method: payMethod,
-        customer_name: customerName || undefined,
-        cashier_id: user!.id,
-        cashier_name: user!.name,
+        payment_method: payMethod, customer_name: customerName || undefined,
+        cashier_id: user!.id, cashier_name: user!.name,
       });
+      const finalPaid = payMethod === "Tunai" ? paidVal : total;
+      const finalChange = Math.max(0, finalPaid - total);
       setShowReceipt({
-        ...res,
-        cart,
-        discount: discountVal,
-        payment_method: payMethod,
-        customer_name: customerName,
-        paid: payMethod === "Tunai" ? paidVal : total,
-        store: storeName,
-        cashier: user!.name,
-        date: new Date(),
+        ...res, cart, subtotal, discount: discountVal, tax: taxVal, total,
+        paid: finalPaid, change: finalChange,
+        payment_method: payMethod, paymentMethod: payMethod,
+        customer_name: customerName, store: storeName, cashier: user!.name, date: new Date(),
       });
-      setCart([]);
-      setDiscount("0");
-      setCustomerName("");
-      setPhone("");
-      setPaid("");
+      setCart([]); setDiscount("0"); setCustomerName(""); setPhone(""); setPaid("");
       setShowCheckout(false);
-      if (loadedDraftId) {
-        await markDraftPaid(loadedDraftId);
-        setLoadedDraftId(null);
-      }
+      if (loadedDraftId) { await markDraftPaid(loadedDraftId); setLoadedDraftId(null); }
       toast.show("Transaksi sukses", "success");
     } catch (e: any) {
       toast.show("Gagal: " + (e?.message || "error"), "error");
-    } finally {
-      setBusy(false);
-    }
+    } finally { setBusy(false); }
   };
 
   return (
@@ -246,8 +229,23 @@ export default function Cashier() {
       <LinearGradient colors={[c.brand, c.brandDark]} style={styles.headerBg} />
       <SafeAreaView edges={["top"]}>
         <View style={styles.header}>
-          <Text style={styles.title}>Kasir</Text>
-          <Text style={styles.subtitle}>{storeName}</Text>
+          <View>
+            <Text style={styles.title}>Kasir</Text>
+            <Text style={styles.subtitle}>{storeName}</Text>
+          </View>
+          {/* Cart quick-access badge di header */}
+          {cart.length > 0 && (
+            <Pressable
+              onPress={() => setShowCheckout(true)}
+              style={styles.headerCartBtn}
+              android_ripple={{ color: "rgba(255,255,255,0.2)" }}
+            >
+              <MaterialCommunityIcons name="cart-outline" size={22} color="#fff" />
+              <View style={styles.headerCartBadge}>
+                <Text style={styles.headerCartBadgeText}>{totalItems}</Text>
+              </View>
+            </Pressable>
+          )}
         </View>
 
         {/* Search */}
@@ -257,7 +255,7 @@ export default function Cashier() {
             testID="cashier-search-input"
             value={search}
             onChangeText={setSearch}
-            placeholder="Cari produk atau barcode"
+            placeholder="Cari produk..."
             placeholderTextColor={c.onSurfaceMuted}
             style={[styles.searchInput, { color: c.onSurface }]}
           />
@@ -275,23 +273,11 @@ export default function Cashier() {
           contentContainerStyle={styles.chipsContent}
           style={styles.chips}
         >
-          <Chip
-            label="Semua"
-            active={activeCat === "all"}
-            onPress={() => setActiveCat("all")}
-            testID="chip-all"
-          />
-          {cats
-            .filter((cat) => cat.id !== "cat_topping")
-            .map((cat) => (
-              <Chip
-                key={cat.id}
-                label={cat.name}
-                active={activeCat === cat.id}
-                onPress={() => setActiveCat(cat.id)}
-                testID={`chip-${cat.id}`}
-              />
-            ))}
+          <Chip label="Semua" active={activeCat === "all"} onPress={() => setActiveCat("all")} testID="chip-all" />
+          {cats.filter((cat) => cat.id !== "cat_topping").map((cat) => (
+            <Chip key={cat.id} label={cat.name} active={activeCat === cat.id}
+              onPress={() => setActiveCat(cat.id)} testID={`chip-${cat.id}`} />
+          ))}
         </ScrollView>
       </SafeAreaView>
 
@@ -303,39 +289,16 @@ export default function Cashier() {
         columnWrapperStyle={{ gap: SPACING.md }}
         contentContainerStyle={styles.gridContent}
         showsVerticalScrollIndicator={false}
-        renderItem={({ item }) => (
-          <Pressable
-            testID={`product-card-${item.id}`}
-            onPress={() => addToCart(item)}
-            android_ripple={{ color: c.brandSoft }}
-            style={[styles.productCard, { backgroundColor: c.surfaceSecondary }]}
-          >
-            <View style={[styles.thumb, { backgroundColor: c.brandSoft }]}>
-              <MaterialCommunityIcons
-                name={
-                  item.category_id === "cat_minuman"
-                    ? "coffee"
-                    : item.category_id === "cat_camilan"
-                    ? "food-drumstick"
-                    : "noodles"
-                }
-                size={28}
-                color={c.brand}
-              />
-            </View>
-            <Text style={[styles.prodName, { color: c.onSurface }]} numberOfLines={2}>
-              {item.name}
-            </Text>
-            <Text style={[styles.prodPrice, { color: c.brand }]}>
-              {formatRp(item.sell_price)}
-            </Text>
-            {item.stock <= item.min_stock && (
-              <View style={styles.stockBadge}>
-                <Text style={styles.stockBadgeText}>Stok {item.stock}</Text>
-              </View>
-            )}
-          </Pressable>
-        )}
+        renderItem={({ item }) => {
+          const qtyInCart = cartQtyMap[item.id] || 0;
+          return (
+            <ProductCard
+              item={item}
+              qtyInCart={qtyInCart}
+              onPress={() => addToCart(item)}
+            />
+          );
+        }}
         ListEmptyComponent={
           <View style={styles.emptyList}>
             <MaterialCommunityIcons name="package-variant" size={48} color={c.onSurfaceMuted} />
@@ -362,28 +325,16 @@ export default function Cashier() {
       )}
 
       {/* Topping modal */}
-      <Modal
-        visible={!!toppingFor}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setToppingFor(null)}
-      >
+      <Modal visible={!!toppingFor} animationType="slide" transparent onRequestClose={() => setToppingFor(null)}>
         <ToppingPicker
-          product={toppingFor}
-          toppings={toppings}
+          product={toppingFor} toppings={toppings}
           onClose={() => setToppingFor(null)}
           onAdd={(qty, sel) => {
             if (!toppingFor) return;
-            setCart((prev) => [
-              ...prev,
-              {
-                productId: toppingFor.id,
-                productName: toppingFor.name,
-                price: toppingFor.sell_price,
-                qty,
-                toppings: sel,
-              },
-            ]);
+            setCart((prev) => [...prev, {
+              productId: toppingFor.id, productName: toppingFor.name,
+              price: toppingFor.sell_price, qty, toppings: sel,
+            }]);
             setToppingFor(null);
             toast.show(`+ ${toppingFor.name}`, "success");
           }}
@@ -391,96 +342,117 @@ export default function Cashier() {
       </Modal>
 
       {/* Checkout modal */}
-      <Modal
-        visible={showCheckout}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setShowCheckout(false)}
-      >
+      <Modal visible={showCheckout} animationType="slide" transparent onRequestClose={() => setShowCheckout(false)}>
         <CheckoutSheet
-          cart={cart}
-          subtotal={subtotal}
-          discount={discount}
-          setDiscount={setDiscount}
-          customerName={customerName}
-          setCustomerName={setCustomerName}
-          phone={phone}
-          setPhone={setPhone}
-          paid={paid}
-          setPaid={setPaid}
-          payMethod={payMethod}
-          setPayMethod={setPayMethod}
-          tax={taxVal}
-          total={total}
-          change={change}
-          busy={busy}
-          loadedDraftId={loadedDraftId}
-          onClose={() => setShowCheckout(false)}
-          onSubmit={submitOrder}
-          onSaveDraft={onSaveDraft}
-          incLine={incLine}
-          decLine={decLine}
-          removeLine={removeLine}
+          cart={cart} subtotal={subtotal} discount={discount} setDiscount={setDiscount}
+          customerName={customerName} setCustomerName={setCustomerName}
+          phone={phone} setPhone={setPhone} paid={paid} setPaid={setPaid}
+          payMethod={payMethod} setPayMethod={setPayMethod}
+          tax={taxVal} total={total} change={change} busy={busy} loadedDraftId={loadedDraftId}
+          onClose={() => setShowCheckout(false)} onSubmit={submitOrder} onSaveDraft={onSaveDraft}
+          incLine={incLine} decLine={decLine} removeLine={removeLine}
         />
       </Modal>
 
       {/* Receipt modal */}
-      <Modal
-        visible={!!showReceipt}
-        animationType="fade"
-        transparent
-        onRequestClose={() => setShowReceipt(null)}
-      >
+      <Modal visible={!!showReceipt} animationType="fade" transparent onRequestClose={() => setShowReceipt(null)}>
         <ReceiptView data={showReceipt} onClose={() => setShowReceipt(null)} />
       </Modal>
     </View>
   );
 }
 
-// ----- Components -----
-const Chip = ({
-  label,
-  active,
+// ─── ProductCard ─────────────────────────────────────────────────────────────
+const ProductCard = React.memo(({
+  item,
+  qtyInCart,
   onPress,
-  testID,
 }: {
-  label: string;
-  active: boolean;
+  item: Product;
+  qtyInCart: number;
   onPress: () => void;
-  testID?: string;
+}) => {
+  const c = COLORS.light;
+  const isLowStock = item.stock <= item.min_stock;
+
+  return (
+    <Pressable
+      testID={`product-card-${item.id}`}
+      onPress={onPress}
+      android_ripple={{ color: c.brandSoft }}
+      style={[styles.productCard, { backgroundColor: c.surfaceSecondary }]}
+    >
+      {/* Qty badge jika sudah ada di cart */}
+      {qtyInCart > 0 && (
+        <View style={[styles.qtyBadge, { backgroundColor: c.brand }]}>
+          <Text style={styles.qtyBadgeText}>{qtyInCart}</Text>
+        </View>
+      )}
+
+      {/* Stok rendah badge */}
+      {isLowStock && (
+        <View style={styles.stockBadge}>
+          <Text style={styles.stockBadgeText}>Stok {item.stock}</Text>
+        </View>
+      )}
+
+      {/* Thumb icon */}
+      <View style={[
+        styles.thumb,
+        { backgroundColor: qtyInCart > 0 ? c.brandSoft : c.surfaceTertiary }
+      ]}>
+        <MaterialCommunityIcons
+          name={getCatIcon(item.category_id)}
+          size={32}
+          color={qtyInCart > 0 ? c.brand : c.onSurfaceMuted}
+        />
+      </View>
+
+      {/* Nama & harga */}
+      <Text style={[styles.prodName, { color: c.onSurface }]} numberOfLines={2}>
+        {item.name}
+      </Text>
+      <Text style={[styles.prodPrice, { color: c.brand }]}>
+        {formatRp(item.sell_price)}
+      </Text>
+
+      {/* Tombol tambah eksplisit */}
+      <View style={[
+        styles.addBtn,
+        { backgroundColor: qtyInCart > 0 ? c.brand : c.brandSoft }
+      ]}>
+        <MaterialCommunityIcons name="plus" size={16} color={qtyInCart > 0 ? "#fff" : c.brand} />
+        <Text style={[styles.addBtnText, { color: qtyInCart > 0 ? "#fff" : c.brand }]}>
+          {qtyInCart > 0 ? `Tambah lagi` : "Tambah"}
+        </Text>
+      </View>
+    </Pressable>
+  );
+});
+
+// ─── Chip ─────────────────────────────────────────────────────────────────────
+const Chip = ({ label, active, onPress, testID }: {
+  label: string; active: boolean; onPress: () => void; testID?: string;
 }) => {
   const c = COLORS.light;
   return (
     <Pressable
-      testID={testID}
-      onPress={onPress}
+      testID={testID} onPress={onPress}
       android_ripple={{ color: c.brandSoft }}
-      style={[
-        styles.chip,
-        {
-          backgroundColor: active ? c.brand : c.surfaceSecondary,
-          borderColor: active ? c.brand : c.border,
-        },
-      ]}
+      style={[styles.chip, {
+        backgroundColor: active ? c.brand : c.surfaceSecondary,
+        borderColor: active ? c.brand : c.border,
+      }]}
     >
-      <Text
-        style={[
-          styles.chipText,
-          { color: active ? "#fff" : c.onSurface, fontWeight: active ? "800" : "600" },
-        ]}
-      >
+      <Text style={[styles.chipText, { color: active ? "#fff" : c.onSurface, fontWeight: active ? "800" : "600" }]}>
         {label}
       </Text>
     </Pressable>
   );
 };
 
-const ToppingPicker = ({
-  product,
-  toppings,
-  onClose,
-  onAdd,
-}: {
+// ─── ToppingPicker ────────────────────────────────────────────────────────────
+const ToppingPicker = ({ product, toppings, onClose, onAdd }: {
   product: Product | null;
   toppings: Product[];
   onClose: () => void;
@@ -490,25 +462,15 @@ const ToppingPicker = ({
   const [qty, setQty] = useState(1);
   const [sel, setSel] = useState<Record<string, number>>({});
 
-  useEffect(() => {
-    setQty(1);
-    setSel({});
-  }, [product?.id]);
+  useEffect(() => { setQty(1); setSel({}); }, [product?.id]);
 
   if (!product) return null;
+
   const setTopQty = (id: string, q: number) => {
-    setSel((s) => {
-      const n = { ...s };
-      if (q <= 0) delete n[id];
-      else n[id] = q;
-      return n;
-    });
+    setSel((s) => { const n = { ...s }; if (q <= 0) delete n[id]; else n[id] = q; return n; });
   };
 
-  const toppingsTotal = toppings.reduce(
-    (s, t) => s + (sel[t.id] || 0) * t.sell_price,
-    0
-  );
+  const toppingsTotal = toppings.reduce((s, t) => s + (sel[t.id] || 0) * t.sell_price, 0);
   const lineTotal = (product.sell_price + toppingsTotal) * qty;
 
   return (
@@ -521,10 +483,7 @@ const ToppingPicker = ({
             <MaterialCommunityIcons name="close" size={22} color={c.onSurface} />
           </Pressable>
         </View>
-        <Text style={[styles.modalSub, { color: c.onSurfaceMuted }]}>
-          Pilih topping (opsional)
-        </Text>
-
+        <Text style={[styles.modalSub, { color: c.onSurfaceMuted }]}>Pilih topping (opsional)</Text>
         <ScrollView style={{ marginTop: SPACING.md }}>
           {toppings.map((t) => {
             const cur = sel[t.id] || 0;
@@ -541,27 +500,15 @@ const ToppingPicker = ({
             );
           })}
         </ScrollView>
-
         <View style={[styles.qtyBlock, { borderColor: c.border }]}>
           <Text style={{ color: c.onSurface, fontWeight: "700" }}>Jumlah</Text>
           <Stepper value={qty} onChange={(v) => setQty(Math.max(1, v))} />
         </View>
-
         <Pressable
           testID="topping-add-button"
-          onPress={() =>
-            onAdd(
-              qty,
-              toppings
-                .filter((t) => sel[t.id])
-                .map((t) => ({
-                  productId: t.id,
-                  productName: t.name,
-                  price: t.sell_price,
-                  qty: sel[t.id],
-                }))
-            )
-          }
+          onPress={() => onAdd(qty, toppings.filter((t) => sel[t.id]).map((t) => ({
+            productId: t.id, productName: t.name, price: t.sell_price, qty: sel[t.id],
+          })))}
           android_ripple={{ color: "rgba(255,255,255,0.18)" }}
           style={[styles.modalCta, { backgroundColor: c.brand }]}
         >
@@ -572,62 +519,36 @@ const ToppingPicker = ({
   );
 };
 
+// ─── Stepper ──────────────────────────────────────────────────────────────────
 const Stepper = ({ value, onChange }: { value: number; onChange: (v: number) => void }) => {
   const c = COLORS.light;
   return (
     <View style={styles.stepper}>
-      <Pressable
-        onPress={() => onChange(value - 1)}
-        style={[styles.stepperBtn, { backgroundColor: c.surfaceTertiary }]}
-        hitSlop={6}
-      >
+      <Pressable onPress={() => onChange(value - 1)}
+        style={[styles.stepperBtn, { backgroundColor: c.surfaceTertiary }]} hitSlop={6}>
         <MaterialCommunityIcons name="minus" size={16} color={c.onSurface} />
       </Pressable>
       <Text style={[styles.stepperValue, { color: c.onSurface }]}>{value}</Text>
-      <Pressable
-        onPress={() => onChange(value + 1)}
-        style={[styles.stepperBtn, { backgroundColor: c.brand }]}
-        hitSlop={6}
-      >
+      <Pressable onPress={() => onChange(value + 1)}
+        style={[styles.stepperBtn, { backgroundColor: c.brand }]} hitSlop={6}>
         <MaterialCommunityIcons name="plus" size={16} color="#fff" />
       </Pressable>
     </View>
   );
 };
 
+// ─── CheckoutSheet ────────────────────────────────────────────────────────────
 const CheckoutSheet = (props: any) => {
   const c = COLORS.light;
   const {
-    cart,
-    subtotal,
-    discount,
-    setDiscount,
-    customerName,
-    setCustomerName,
-    phone,
-    setPhone,
-    paid,
-    setPaid,
-    payMethod,
-    setPayMethod,
-    tax,
-    total,
-    change,
-    busy,
-    loadedDraftId,
-    onClose,
-    onSubmit,
-    onSaveDraft,
-    incLine,
-    decLine,
-    removeLine,
+    cart, subtotal, discount, setDiscount, customerName, setCustomerName,
+    phone, setPhone, paid, setPaid, payMethod, setPayMethod,
+    tax, total, change, busy, loadedDraftId,
+    onClose, onSubmit, onSaveDraft, incLine, decLine, removeLine,
   } = props;
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-      style={styles.modalBg}
-    >
+    <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.modalBg}>
       <View style={[styles.modalSheet, { backgroundColor: c.surface, height: "92%" }]}>
         <View style={styles.modalHandle} />
         <View style={styles.modalHeader}>
@@ -662,19 +583,13 @@ const CheckoutSheet = (props: any) => {
 
           <Text style={[styles.section, { color: c.onSurfaceMuted }]}>Detail Pelanggan</Text>
           <TextInput
-            testID="checkout-customer-name"
-            value={customerName}
-            onChangeText={setCustomerName}
-            placeholder="Nama pelanggan (wajib untuk draft)"
-            placeholderTextColor={c.onSurfaceMuted}
+            testID="checkout-customer-name" value={customerName} onChangeText={setCustomerName}
+            placeholder="Nama pelanggan (wajib untuk draft)" placeholderTextColor={c.onSurfaceMuted}
             style={[styles.input, { borderColor: c.border, color: c.onSurface }]}
           />
           <TextInput
-            testID="checkout-customer-phone"
-            value={phone}
-            onChangeText={setPhone}
-            placeholder="No HP (opsional)"
-            placeholderTextColor={c.onSurfaceMuted}
+            testID="checkout-customer-phone" value={phone} onChangeText={setPhone}
+            placeholder="No HP (opsional)" placeholderTextColor={c.onSurfaceMuted}
             keyboardType="phone-pad"
             style={[styles.input, { borderColor: c.border, color: c.onSurface, marginTop: 8 }]}
           />
@@ -682,31 +597,14 @@ const CheckoutSheet = (props: any) => {
           <Text style={[styles.section, { color: c.onSurfaceMuted }]}>Metode Pembayaran</Text>
           <View style={styles.payRow}>
             {PAY_METHODS.map((p) => (
-              <Pressable
-                key={p.id}
-                testID={`pay-${p.id}`}
-                onPress={() => setPayMethod(p.id)}
-                style={[
-                  styles.payBtn,
-                  {
-                    borderColor: payMethod === p.id ? c.brand : c.border,
-                    backgroundColor: payMethod === p.id ? c.brandSoft : c.surfaceSecondary,
-                  },
-                ]}
+              <Pressable key={p.id} testID={`pay-${p.id}`} onPress={() => setPayMethod(p.id)}
+                style={[styles.payBtn, {
+                  borderColor: payMethod === p.id ? c.brand : c.border,
+                  backgroundColor: payMethod === p.id ? c.brandSoft : c.surfaceSecondary,
+                }]}
               >
-                <MaterialCommunityIcons
-                  name={p.icon}
-                  size={18}
-                  color={payMethod === p.id ? c.brand : c.onSurfaceMuted}
-                />
-                <Text
-                  style={{
-                    color: payMethod === p.id ? c.brand : c.onSurface,
-                    fontSize: 11,
-                    fontWeight: "700",
-                    marginTop: 2,
-                  }}
-                >
+                <MaterialCommunityIcons name={p.icon} size={18} color={payMethod === p.id ? c.brand : c.onSurfaceMuted} />
+                <Text style={{ color: payMethod === p.id ? c.brand : c.onSurface, fontSize: 11, fontWeight: "700", marginTop: 2 }}>
                   {p.id}
                 </Text>
               </Pressable>
@@ -717,12 +615,8 @@ const CheckoutSheet = (props: any) => {
             <View style={{ flex: 1 }}>
               <Text style={[styles.section, { color: c.onSurfaceMuted }]}>Diskon (Rp)</Text>
               <TextInput
-                testID="checkout-discount"
-                value={discount}
-                onChangeText={setDiscount}
-                placeholder="0"
-                keyboardType="numeric"
-                placeholderTextColor={c.onSurfaceMuted}
+                testID="checkout-discount" value={discount} onChangeText={setDiscount}
+                placeholder="0" keyboardType="numeric" placeholderTextColor={c.onSurfaceMuted}
                 style={[styles.input, { borderColor: c.border, color: c.onSurface }]}
               />
             </View>
@@ -730,12 +624,8 @@ const CheckoutSheet = (props: any) => {
               <View style={{ flex: 1 }}>
                 <Text style={[styles.section, { color: c.onSurfaceMuted }]}>Bayar (Rp)</Text>
                 <TextInput
-                  testID="checkout-paid"
-                  value={paid}
-                  onChangeText={setPaid}
-                  placeholder="0"
-                  keyboardType="numeric"
-                  placeholderTextColor={c.onSurfaceMuted}
+                  testID="checkout-paid" value={paid} onChangeText={setPaid}
+                  placeholder="0" keyboardType="numeric" placeholderTextColor={c.onSurfaceMuted}
                   style={[styles.input, { borderColor: c.border, color: c.onSurface }]}
                 />
               </View>
@@ -748,50 +638,33 @@ const CheckoutSheet = (props: any) => {
             {tax > 0 && <RowKV k="Pajak" v={formatRp(tax)} />}
             <View style={[styles.divider, { backgroundColor: c.divider }]} />
             <RowKV k="Total" v={formatRp(total)} highlight />
-            {payMethod === "Tunai" && (
-              <RowKV k="Kembalian" v={formatRp(change)} />
-            )}
+            {payMethod === "Tunai" && <RowKV k="Kembalian" v={formatRp(change)} />}
           </View>
         </ScrollView>
 
         <View style={{ flexDirection: "row", gap: 8 }}>
           <Pressable
-            testID="checkout-save-draft"
-            disabled={busy || cart.length === 0}
-            onPress={onSaveDraft}
+            testID="checkout-save-draft" disabled={busy || cart.length === 0} onPress={onSaveDraft}
             android_ripple={{ color: c.brandSoft }}
-            style={[
-              styles.modalCta,
-              {
-                flex: 1,
-                backgroundColor: c.surfaceSecondary,
-                borderWidth: 1.5,
-                borderColor: c.brand,
-                opacity: busy || cart.length === 0 ? 0.6 : 1,
-              },
-            ]}
+            style={[styles.modalCta, {
+              flex: 1, backgroundColor: c.surfaceSecondary,
+              borderWidth: 1.5, borderColor: c.brand,
+              opacity: busy || cart.length === 0 ? 0.6 : 1,
+            }]}
           >
             <Text style={[styles.modalCtaText, { color: c.brand }]}>
               {loadedDraftId ? "Update Draft" : "Simpan Draft"}
             </Text>
           </Pressable>
           <Pressable
-            testID="checkout-pay-button"
-            disabled={busy || cart.length === 0}
-            onPress={onSubmit}
+            testID="checkout-pay-button" disabled={busy || cart.length === 0} onPress={onSubmit}
             android_ripple={{ color: "rgba(255,255,255,0.18)" }}
-            style={[
-              styles.modalCta,
-              {
-                flex: 1.4,
-                backgroundColor: c.brand,
-                opacity: busy || cart.length === 0 ? 0.6 : 1,
-              },
-            ]}
+            style={[styles.modalCta, {
+              flex: 1.4, backgroundColor: c.brand,
+              opacity: busy || cart.length === 0 ? 0.6 : 1,
+            }]}
           >
-            {busy ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
+            {busy ? <ActivityIndicator color="#fff" /> : (
               <Text style={styles.modalCtaText} numberOfLines={1}>Bayar • {formatRp(total)}</Text>
             )}
           </Pressable>
@@ -801,141 +674,161 @@ const CheckoutSheet = (props: any) => {
   );
 };
 
+// ─── RowKV ────────────────────────────────────────────────────────────────────
 const RowKV = ({ k, v, highlight }: { k: string; v: string; highlight?: boolean }) => {
   const c = COLORS.light;
   return (
     <View style={styles.kvRow}>
-      <Text style={{ color: highlight ? c.onSurface : c.onSurfaceMuted, fontWeight: highlight ? "800" : "500" }}>
-        {k}
-      </Text>
-      <Text
-        style={{
-          color: highlight ? c.brand : c.onSurface,
-          fontWeight: highlight ? "800" : "700",
-          fontSize: highlight ? 18 : 14,
-        }}
-      >
+      <Text style={{ color: highlight ? c.onSurface : c.onSurfaceMuted, fontWeight: highlight ? "800" : "500" }}>{k}</Text>
+      <Text style={{ color: highlight ? c.brand : c.onSurface, fontWeight: highlight ? "800" : "700", fontSize: highlight ? 18 : 14 }}>
         {v}
       </Text>
     </View>
   );
 };
 
+// ─── ReceiptView ──────────────────────────────────────────────────────────────
 const ReceiptView = ({ data, onClose }: { data: any; onClose: () => void }) => {
   const c = COLORS.light;
   const toast = useToast();
   const [printing, setPrinting] = useState(false);
+  // ✅ FIX #2: error cetak sekarang PERSIST di dalam modal (tidak cuma toast
+  // yang hilang sendiri), supaya kasir tidak kelewat lihat kalau struk gagal cetak.
+  const [printError, setPrintError] = useState<string | null>(null);
+  // ✅ Lacak apakah struk SUDAH pernah berhasil dicetak di sesi modal ini,
+  // dipakai untuk menentukan apakah perlu konfirmasi sebelum "Selesai".
+  const [hasPrintedOnce, setHasPrintedOnce] = useState(false);
+
   if (!data) return null;
 
   const onPrint = async () => {
+    setPrinting(true);
+    setPrintError(null);
     try {
-      const { printReceipt, getDefaultPrinter } = await import("@/src/services/bluetoothPrinter");
       const def = await getDefaultPrinter();
-      const paper = def?.paperSize ?? "58mm";
-      setPrinting(true);
-      const r = await printReceipt(
-        {
-          storeName: data.store,
-          invoiceCode: data.code,
-          dateTime: new Date(data.date).toLocaleString("id-ID"),
-          cashierName: data.cashier,
-          customerName: data.customer_name,
-          paymentMethod: data.payment_method,
-          lines: data.cart.map((l: CartLine) => ({
-            productName: l.productName,
-            qty: l.qty,
-            price: l.price,
-            toppings: l.toppings.map((t) => ({ productName: t.productName, qty: t.qty, price: t.price })),
-          })),
-          subtotal: data.subtotal,
-          discount: data.discount,
-          tax: data.tax,
-          total: data.total,
-          paid: data.paid,
-          change: data.change,
-          footer: "Terima kasih telah berkunjung. Semoga harimu menyenangkan",
-        },
-        paper
-      );
-      setPrinting(false);
-      if (r.ok) toast.show("Struk dicetak", "success");
-      else toast.show(r.error ?? "Gagal cetak", "error");
+      const paper: PaperSize = def?.paperSize ?? "58mm";
+      const result = await printReceipt({
+        storeName: data.store, invoiceCode: data.code,
+        dateTime: new Date(data.date).toLocaleString("id-ID"),
+        cashierName: data.cashier, customerName: data.customer_name,
+        paymentMethod: data.paymentMethod,
+        lines: data.cart.map((l: CartLine) => ({
+          productName: l.productName, qty: l.qty, price: l.price,
+          toppings: l.toppings.map((t) => ({ productName: t.productName, qty: t.qty, price: t.price })),
+        })),
+        subtotal: data.subtotal, discount: data.discount, tax: data.tax,
+        total: data.total, paid: data.paid, change: data.change,
+        footer: "Terima kasih telah berkunjung. Semoga harimu menyenangkan",
+      }, paper);
+      if (result.ok) {
+        toast.show("Struk dicetak", "success");
+        setHasPrintedOnce(true);
+        setPrintError(null);
+      } else {
+        const msg = result.error ?? "Gagal cetak";
+        toast.show(msg, "error");
+        setPrintError(msg);
+      }
     } catch (e: any) {
-      setPrinting(false);
-      toast.show("Gagal cetak: " + (e?.message || ""), "error");
+      const msg = "Gagal cetak: " + (e?.message || "");
+      toast.show(msg, "error");
+      setPrintError(msg);
+    } finally { setPrinting(false); }
+  };
+
+  // ✅ FIX #1: "Selesai" sekarang minta konfirmasi kalau struk BELUM pernah
+  // berhasil dicetak di sesi ini, supaya kasir tidak reflex menutup modal
+  // dan lupa kalau struknya belum ke-print sama sekali.
+  const onRequestClose = () => {
+    if (hasPrintedOnce) {
+      onClose();
+      return;
     }
+    Alert.alert(
+      "Belum cetak struk?",
+      "Struk untuk transaksi ini belum pernah berhasil dicetak. Tutup tanpa cetak?",
+      [
+        { text: "Cetak Dulu", style: "cancel" },
+        { text: "Tutup Tanpa Cetak", style: "destructive", onPress: onClose },
+      ]
+    );
   };
 
   return (
     <View style={styles.modalBg}>
       <View style={[styles.modalSheet, { backgroundColor: c.surface, maxHeight: "92%" }]}>
         <View style={styles.modalHandle} />
-        <View style={[styles.receiptInner, { backgroundColor: c.surfaceSecondary }]}>
-          <Text style={[styles.rTitle, { color: c.onSurface }]}>{data.store}</Text>
-          <Text style={[styles.rSub, { color: c.onSurfaceMuted }]}>
-            {new Date(data.date).toLocaleString("id-ID")}
-          </Text>
-          <Text style={[styles.rSub, { color: c.onSurfaceMuted }]}>Kasir: {data.cashier}</Text>
-          <Text style={[styles.rSub, { color: c.onSurfaceMuted }]}>No: {data.code}</Text>
-          {data.customer_name ? (
-            <Text style={[styles.rSub, { color: c.onSurfaceMuted }]}>Pelanggan: {data.customer_name}</Text>
-          ) : null}
-          <View style={[styles.dashed, { borderColor: c.border }]} />
-          {data.cart.map((l: CartLine, i: number) => (
-            <View key={i} style={{ marginBottom: 6 }}>
-              <View style={styles.rRow}>
-                <Text style={{ color: c.onSurface, flex: 1 }} numberOfLines={1}>
-                  {l.productName}
-                </Text>
-                <Text style={{ color: c.onSurface }}>x{l.qty}</Text>
-                <Text style={{ color: c.onSurface, width: 80, textAlign: "right" }}>
-                  {formatRp(l.price * l.qty)}
-                </Text>
-              </View>
-              {l.toppings.map((t) => (
-                <View key={t.productId} style={styles.rRow}>
-                  <Text style={{ color: c.onSurfaceMuted, flex: 1, fontSize: 12 }}>
-                    + {t.productName} x{t.qty}
-                  </Text>
-                  <Text style={{ color: c.onSurfaceMuted, width: 80, textAlign: "right", fontSize: 12 }}>
-                    {formatRp(t.price * t.qty * l.qty)}
-                  </Text>
+        <ScrollView>
+          <View style={[styles.receiptInner, { backgroundColor: c.surfaceSecondary }]}>
+            <Text style={[styles.rTitle, { color: c.onSurface }]}>{data.store}</Text>
+            <Text style={[styles.rSub, { color: c.onSurfaceMuted }]}>{new Date(data.date).toLocaleString("id-ID")}</Text>
+            <Text style={[styles.rSub, { color: c.onSurfaceMuted }]}>Kasir: {data.cashier}</Text>
+            <Text style={[styles.rSub, { color: c.onSurfaceMuted }]}>No: {data.code}</Text>
+            {data.customer_name ? <Text style={[styles.rSub, { color: c.onSurfaceMuted }]}>Pelanggan: {data.customer_name}</Text> : null}
+            <View style={[styles.dashed, { borderColor: c.border }]} />
+            {data.cart.map((l: CartLine, i: number) => (
+              <View key={i} style={{ marginBottom: 6 }}>
+                <View style={styles.rRow}>
+                  <Text style={{ color: c.onSurface, flex: 1 }} numberOfLines={1}>{l.productName}</Text>
+                  <Text style={{ color: c.onSurface }}>x{l.qty}</Text>
+                  <Text style={{ color: c.onSurface, width: 80, textAlign: "right" }}>{formatRp(l.price * l.qty)}</Text>
                 </View>
-              ))}
-            </View>
-          ))}
-          <View style={[styles.dashed, { borderColor: c.border }]} />
-          <RowKV k="Subtotal" v={formatRp(data.subtotal)} />
-          {data.discount > 0 && <RowKV k="Diskon" v={"- " + formatRp(data.discount)} />}
-          {data.tax > 0 && <RowKV k="Pajak" v={formatRp(data.tax)} />}
-          <RowKV k="Total" v={formatRp(data.total)} highlight />
-          <RowKV k={data.payment_method} v={formatRp(data.paid)} />
-          {data.change > 0 && <RowKV k="Kembali" v={formatRp(data.change)} />}
-          <View style={[styles.dashed, { borderColor: c.border }]} />
-          <Text style={{ color: c.onSurfaceMuted, textAlign: "center", fontSize: 12, marginTop: 6 }}>
-            Terima kasih telah berkunjung.{"\n"}Semoga harimu menyenangkan ☕
-          </Text>
-        </View>
-        <View style={{ flexDirection: "row", gap: 8 }}>
-          <Pressable
-            testID="receipt-print"
-            onPress={onPrint}
-            disabled={printing}
+                {l.toppings.map((t) => (
+                  <View key={t.productId} style={styles.rRow}>
+                    <Text style={{ color: c.onSurfaceMuted, flex: 1, fontSize: 12 }}>+ {t.productName} x{t.qty}</Text>
+                    <Text style={{ color: c.onSurfaceMuted, width: 80, textAlign: "right", fontSize: 12 }}>{formatRp(t.price * t.qty * l.qty)}</Text>
+                  </View>
+                ))}
+              </View>
+            ))}
+            <View style={[styles.dashed, { borderColor: c.border }]} />
+            <RowKV k="Subtotal" v={formatRp(data.subtotal)} />
+            {data.discount > 0 && <RowKV k="Diskon" v={"- " + formatRp(data.discount)} />}
+            {data.tax > 0 && <RowKV k="Pajak" v={formatRp(data.tax)} />}
+            <RowKV k="Total" v={formatRp(data.total)} highlight />
+            <RowKV k={data.payment_method} v={formatRp(data.paid)} />
+            {data.change > 0 && <RowKV k="Kembali" v={formatRp(data.change)} />}
+            <View style={[styles.dashed, { borderColor: c.border }]} />
+            <Text style={{ color: c.onSurfaceMuted, textAlign: "center", fontSize: 12, marginTop: 6 }}>
+              Terima kasih telah berkunjung.{"\n"}Semoga harimu menyenangkan ☕
+            </Text>
+          </View>
+        </ScrollView>
+
+        {/* ✅ FIX #2: banner error persist (tidak hilang sendiri seperti toast) */}
+        {printError && (
+          <View style={[styles.printErrorBanner, { borderColor: c.error, backgroundColor: c.error + "14" }]}>
+            <MaterialCommunityIcons name="alert-circle" size={18} color={c.error} />
+            <Text style={{ color: c.error, fontSize: 12, flex: 1, fontWeight: "600" }}>
+              {printError}
+            </Text>
+          </View>
+        )}
+
+        {hasPrintedOnce && !printError && (
+          <View style={[styles.printOkBanner, { backgroundColor: c.success + "14" }]}>
+            <MaterialCommunityIcons name="check-circle" size={18} color={c.success} />
+            <Text style={{ color: c.success, fontSize: 12, flex: 1, fontWeight: "600" }}>
+              Struk sudah dicetak
+            </Text>
+          </View>
+        )}
+
+        <View style={{ flexDirection: "row", gap: 8, marginTop: SPACING.md }}>
+          <Pressable testID="receipt-print" onPress={onPrint} disabled={printing}
             style={[styles.modalCta, { flex: 1, backgroundColor: c.accent, opacity: printing ? 0.6 : 1 }]}
             android_ripple={{ color: "rgba(255,255,255,0.18)" }}
           >
-            {printing ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
+            {printing ? <ActivityIndicator color="#fff" /> : (
               <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                 <MaterialCommunityIcons name="printer" size={18} color="#fff" />
-                <Text style={styles.modalCtaText}>Cetak</Text>
+                <Text style={styles.modalCtaText}>
+                  {hasPrintedOnce ? "Cetak Ulang" : "Cetak"}
+                </Text>
               </View>
             )}
           </Pressable>
-          <Pressable
-            testID="receipt-close"
-            onPress={onClose}
+          <Pressable testID="receipt-close" onPress={onRequestClose}
             style={[styles.modalCta, { flex: 1.4, backgroundColor: c.brand }]}
             android_ripple={{ color: "rgba(255,255,255,0.18)" }}
           >
@@ -947,12 +840,44 @@ const ReceiptView = ({ data, onClose }: { data: any; onClose: () => void }) => {
   );
 };
 
+// ─── Styles ───────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: { flex: 1 },
   headerBg: { position: "absolute", top: 0, left: 0, right: 0, height: 200 },
-  header: { paddingHorizontal: SPACING.lg, paddingTop: SPACING.sm, paddingBottom: 4 },
+  header: {
+    paddingHorizontal: SPACING.lg,
+    paddingTop: SPACING.sm,
+    paddingBottom: 4,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
   title: { color: "#fff", fontSize: 20, fontWeight: "800" },
   subtitle: { color: "rgba(255,255,255,0.85)", fontSize: 12, marginTop: 2 },
+
+  // Cart badge di header
+  headerCartBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(255,255,255,0.18)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerCartBadge: {
+    position: "absolute",
+    top: 4,
+    right: 4,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: "#fff",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 3,
+  },
+  headerCartBadgeText: { fontSize: 9, fontWeight: "800", color: COLORS.light.brand },
+
   searchWrap: {
     marginHorizontal: SPACING.lg,
     marginTop: SPACING.md,
@@ -968,7 +893,7 @@ const styles = StyleSheet.create({
   chips: { marginTop: SPACING.sm },
   chipsContent: { paddingHorizontal: SPACING.lg, gap: 8, paddingVertical: 8 },
   chip: {
-    height: 36,
+    height: 34,
     flexShrink: 0,
     paddingHorizontal: 14,
     borderRadius: RADII.pill,
@@ -977,24 +902,33 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   chipText: { fontSize: 13 },
+
+  // Grid
   gridContent: { padding: SPACING.lg, paddingBottom: 140, gap: SPACING.md },
   productCard: {
     flex: 1,
     borderRadius: RADII.md,
     padding: SPACING.md,
-    minHeight: 150,
     ...SHADOW.card,
+    overflow: "hidden",
   },
-  thumb: {
-    width: "100%",
-    height: 70,
-    borderRadius: RADII.sm,
+
+  // Qty badge (pojok kiri atas card)
+  qtyBadge: {
+    position: "absolute",
+    top: 8,
+    left: 8,
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: SPACING.sm,
+    paddingHorizontal: 5,
+    zIndex: 2,
   },
-  prodName: { fontSize: 13, fontWeight: "700", minHeight: 34 },
-  prodPrice: { fontSize: FONT.sizes.md, fontWeight: "800", marginTop: 4 },
+  qtyBadgeText: { color: "#fff", fontSize: 11, fontWeight: "800" },
+
+  // Stok rendah badge (pojok kanan atas)
   stockBadge: {
     position: "absolute",
     top: 8,
@@ -1003,8 +937,36 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     backgroundColor: "#FFEDD5",
     borderRadius: 6,
+    zIndex: 2,
   },
   stockBadgeText: { fontSize: 10, color: "#B26A00", fontWeight: "700" },
+
+  // Thumb area
+  thumb: {
+    width: "100%",
+    height: 72,
+    borderRadius: RADII.sm,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: SPACING.sm,
+    marginTop: SPACING.xs,
+  },
+  prodName: { fontSize: 13, fontWeight: "700", lineHeight: 18, minHeight: 36 },
+  prodPrice: { fontSize: FONT.sizes.md, fontWeight: "800", marginTop: 2, marginBottom: SPACING.sm },
+
+  // Tombol tambah di dalam card
+  addBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    borderRadius: RADII.sm,
+    paddingVertical: 7,
+    marginTop: 2,
+  },
+  addBtnText: { fontSize: 12, fontWeight: "700" },
+
+  // Cart bar
   cartBar: {
     position: "absolute",
     bottom: Platform.OS === "ios" ? 100 : 76,
@@ -1019,97 +981,47 @@ const styles = StyleSheet.create({
     ...SHADOW.fab,
   },
   cartBubble: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 28, height: 28, borderRadius: 14,
     backgroundColor: "rgba(255,255,255,0.22)",
-    alignItems: "center",
-    justifyContent: "center",
+    alignItems: "center", justifyContent: "center",
   },
   cartBubbleText: { color: "#fff", fontWeight: "800" },
   cartBarText: { color: "#fff", flex: 1, fontWeight: "700" },
   cartBarTotal: { color: "#fff", fontWeight: "800", fontSize: 15 },
   emptyList: { paddingVertical: 60, alignItems: "center" },
+
+  // Modal
   modalBg: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
-  modalSheet: {
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: SPACING.lg,
-  },
+  modalSheet: { borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: SPACING.lg },
   modalHandle: {
-    alignSelf: "center",
-    width: 44,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: "#D0CCC6",
-    marginBottom: SPACING.md,
+    alignSelf: "center", width: 44, height: 4, borderRadius: 2,
+    backgroundColor: "#D0CCC6", marginBottom: SPACING.md,
   },
   modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   modalTitle: { fontSize: 18, fontWeight: "800" },
   modalSub: { fontSize: 12, marginTop: 2 },
-  topRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    gap: SPACING.md,
-  },
+  topRow: { flexDirection: "row", alignItems: "center", paddingVertical: 12, borderBottomWidth: 1, gap: SPACING.md },
   qtyBlock: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: 14,
-    borderTopWidth: 1,
-    marginTop: 8,
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingVertical: 14, borderTopWidth: 1, marginTop: 8,
   },
   modalCta: {
-    height: 54,
-    borderRadius: RADII.md,
-    alignItems: "center",
-    justifyContent: "center",
-    marginTop: SPACING.md,
-    overflow: "hidden",
-    ...SHADOW.fab,
+    height: 54, borderRadius: RADII.md, alignItems: "center", justifyContent: "center",
+    marginTop: SPACING.md, overflow: "hidden", ...SHADOW.fab,
   },
   modalCtaText: { color: "#fff", fontWeight: "800", fontSize: 15 },
   stepper: { flexDirection: "row", alignItems: "center", gap: 10 },
-  stepperBtn: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    alignItems: "center",
-    justifyContent: "center",
-  },
+  stepperBtn: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center" },
   stepperValue: { minWidth: 22, textAlign: "center", fontWeight: "800" },
-  cartItem: {
-    flexDirection: "row",
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    gap: SPACING.md,
+  cartItem: { flexDirection: "row", paddingVertical: 12, borderBottomWidth: 1, gap: SPACING.md },
+  section: {
+    fontSize: 11, fontWeight: "700", textTransform: "uppercase",
+    marginTop: SPACING.md, marginBottom: 6, letterSpacing: 0.4,
   },
-  section: { fontSize: 11, fontWeight: "700", textTransform: "uppercase", marginTop: SPACING.md, marginBottom: 6, letterSpacing: 0.4 },
-  input: {
-    borderWidth: 1,
-    borderRadius: RADII.md,
-    paddingHorizontal: SPACING.md,
-    height: 44,
-    fontSize: 14,
-  },
+  input: { borderWidth: 1, borderRadius: RADII.md, paddingHorizontal: SPACING.md, height: 44, fontSize: 14 },
   payRow: { flexDirection: "row", gap: 8 },
-  payBtn: {
-    flex: 1,
-    borderWidth: 1,
-    borderRadius: RADII.md,
-    paddingVertical: 12,
-    alignItems: "center",
-  },
-  totalsCard: {
-    borderRadius: RADII.md,
-    padding: SPACING.md,
-    marginTop: SPACING.lg,
-    gap: 6,
-    ...SHADOW.card,
-  },
+  payBtn: { flex: 1, borderWidth: 1, borderRadius: RADII.md, paddingVertical: 12, alignItems: "center" },
+  totalsCard: { borderRadius: RADII.md, padding: SPACING.md, marginTop: SPACING.lg, gap: 6, ...SHADOW.card },
   kvRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 3 },
   divider: { height: 1, marginVertical: 6 },
   receiptInner: { padding: SPACING.lg, borderRadius: RADII.md, ...SHADOW.card },
@@ -1117,4 +1029,12 @@ const styles = StyleSheet.create({
   rSub: { fontSize: 12, textAlign: "center" },
   dashed: { borderTopWidth: 1, borderStyle: "dashed", marginVertical: 8 },
   rRow: { flexDirection: "row", alignItems: "center", gap: 4 },
+  printErrorBanner: {
+    flexDirection: "row", alignItems: "flex-start", gap: 8,
+    borderWidth: 1, borderRadius: RADII.md, padding: 10, marginTop: SPACING.md,
+  },
+  printOkBanner: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    borderRadius: RADII.md, padding: 10, marginTop: SPACING.md,
+  },
 });

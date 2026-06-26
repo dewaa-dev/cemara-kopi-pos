@@ -1215,6 +1215,11 @@
   resolved "https://registry.npmjs.org/@expo/schema-utils/-/schema-utils-0.1.8.tgz"
   integrity sha512-9I6ZqvnAvKKDiO+ZF8BpQQFYWXOJvTAL5L/227RUbWG1OVZDInFifzCBiqAZ3b67NRfeAgpgvbA7rejsqhY62A==
 
+"@expo/schema-utils@^56.0.0":
+  version "56.0.1"
+  resolved "https://registry.yarnpkg.com/@expo/schema-utils/-/schema-utils-56.0.1.tgz#44b993a64ed8dc0439e7571edf3d70b0f0b78bc4"
+  integrity sha512-CZ/+mYbQmWeOnkCGlWy9K+lFxbJSMFY7+TqBZcKzBSTU5Q7IGRvn/sOG3TdNjIdLPmbA8xe7R/c3UUQ28R9i9w==
+
 "@expo/sdk-runtime-versions@^1.0.0":
   version "1.0.0"
   resolved "https://registry.npmjs.org/@expo/sdk-runtime-versions/-/sdk-runtime-versions-1.0.0.tgz"
@@ -3717,6 +3722,38 @@ expo-constants@~18.0.13:
     "@expo/config" "~12.0.13"
     "@expo/env" "~2.0.8"
 
+expo-dev-client@^56.0.20:
+  version "56.0.20"
+  resolved "https://registry.yarnpkg.com/expo-dev-client/-/expo-dev-client-56.0.20.tgz#c9183a72ef313602f6a83e0a8244fba4b0e330d4"
+  integrity sha512-KebW4r8HhIiRrPzs6ZqVhp/so8buyglAO1h4No0Ibr5C2XRnlIoGWCN4zC6rW7IsI3iKUXcofLAQV9OjoxjiwQ==
+  dependencies:
+    expo-dev-launcher "~56.0.20"
+    expo-dev-menu "~56.0.17"
+    expo-dev-menu-interface "~56.0.0"
+    expo-manifests "~56.0.4"
+    expo-updates-interface "~56.0.1"
+
+expo-dev-launcher@~56.0.20:
+  version "56.0.20"
+  resolved "https://registry.yarnpkg.com/expo-dev-launcher/-/expo-dev-launcher-56.0.20.tgz#a88e437a618f3488eb65b341913678e3ccbb9cfe"
+  integrity sha512-cTuC3GkPl9CTwO3CKnVmEm9qoQ0WairhwvTh6qMlg+zr/QU/tdiU++uDBX67hf9+FuxQOkWGp5khFNosT+0cIg==
+  dependencies:
+    "@expo/schema-utils" "^56.0.0"
+    expo-dev-menu "~56.0.17"
+    expo-manifests "~56.0.4"
+
+expo-dev-menu-interface@~56.0.0:
+  version "56.0.1"
+  resolved "https://registry.yarnpkg.com/expo-dev-menu-interface/-/expo-dev-menu-interface-56.0.1.tgz#2e072832775c5a5fba8fd1630095c5f905f10583"
+  integrity sha512-odATx0ZL/Kis10sKSBiKiGQxAB6coSi/KQtKcMhnQVNno6FkRh5/4e5BqcEvpq2rNMTiQp4ytNAQHtdwbPXvGA==
+
+expo-dev-menu@~56.0.17:
+  version "56.0.17"
+  resolved "https://registry.yarnpkg.com/expo-dev-menu/-/expo-dev-menu-56.0.17.tgz#6975fc057618ed356123fb0d760f495b6892eae9"
+  integrity sha512-OofRkOOZnaDriSav3JDN4NP2lsLt2eOa/Ryptr5nMD62SwnFyK4R6n6PkPVaDU3LSsZqndAJHmN6inS+oziayQ==
+  dependencies:
+    expo-dev-menu-interface "~56.0.0"
+
 expo-file-system@~19.0.23:
   version "19.0.23"
   resolved "https://registry.npmjs.org/expo-file-system/-/expo-file-system-19.0.23.tgz"
@@ -3751,6 +3788,11 @@ expo-image@~3.0.11:
   resolved "https://registry.npmjs.org/expo-image/-/expo-image-3.0.11.tgz"
   integrity sha512-4TudfUCLgYgENv+f48omnU8tjS2S0Pd9EaON5/s1ZUBRwZ7K8acEr4NfvLPSaeXvxW24iLAiyQ7sV7BXQH3RoA==
 
+expo-json-utils@~56.0.0:
+  version "56.0.0"
+  resolved "https://registry.yarnpkg.com/expo-json-utils/-/expo-json-utils-56.0.0.tgz#ddf903e571c3d985ca670c028d06970926a1d3e0"
+  integrity sha512-lUqyv9aIGDbYTQ5Nux2FnH2/Dz0w5uJ8Pr080eS0StXi2jr5OmuMNErpzUnpfnYOU55xKotd4AHv68PfV/ludg==
+
 expo-keep-awake@~15.0.8:
   version "15.0.8"
   resolved "https://registry.npmjs.org/expo-keep-awake/-/expo-keep-awake-15.0.8.tgz"
@@ -3768,6 +3810,13 @@ expo-linking@~8.0.11:
   dependencies:
     expo-constants "~18.0.13"
     invariant "^2.2.4"
+
+expo-manifests@~56.0.4:
+  version "56.0.4"
+  resolved "https://registry.yarnpkg.com/expo-manifests/-/expo-manifests-56.0.4.tgz#ae3ac93868cb0fb3940ab43b166a98f82e24a00f"
+  integrity sha512-Fokawl2UkiExIF0bqGoblRFA8lYpROVD+EpvDwSW4LgqQyPwNua1gLSgHZjdl5GsVugfRMMWE3LHaibDyX93hw==
+  dependencies:
+    expo-json-utils "~56.0.0"
 
 expo-modules-autolinking@3.0.26:
   version "3.0.26"
@@ -3871,6 +3920,11 @@ expo-system-ui@~6.0.9:
   dependencies:
     "@react-native/normalize-colors" "0.81.5"
     debug "^4.3.2"
+
+expo-updates-interface@~56.0.1:
+  version "56.0.2"
+  resolved "https://registry.yarnpkg.com/expo-updates-interface/-/expo-updates-interface-56.0.2.tgz#39ad3894535901773419a477cb478df95df9e38c"
+  integrity sha512-eWTwSZ9y8vrULG2oBn2TQSSIwBGSq/TxGJ3jY6tuVS2FWH/ASRIiKs3zkUZTRoC3ZuV2alz0mUClYV7nNrFx8g==
 
 expo-web-browser@~15.0.10:
   version "15.0.11"
@@ -6075,6 +6129,13 @@ react-is@^19.1.0:
   version "19.2.7"
   resolved "https://registry.npmjs.org/react-is/-/react-is-19.2.7.tgz"
   integrity sha512-kZFnouyVv7eP/Phmrlo9FK+zcAdriZJvzxXHF1Sl1P377WSGe2G/JxVolhTrB/jeV47lKImhNUsijjHAAbcl/A==
+
+react-native-bluetooth-classic@1.60.0-rc.7:
+  version "1.60.0-rc.7"
+  resolved "https://registry.yarnpkg.com/react-native-bluetooth-classic/-/react-native-bluetooth-classic-1.60.0-rc.7.tgz#39bf869182a4d5c12c0f073de08d0a0fd7ee1e3b"
+  integrity sha512-jrPLXcev6wQrJK5f69r+y2LF6cZ9rz63pYxn9rMVH/U+zeRNyE5JeFNS/02rnaDqINHz3ucrQdECn7QeLSBrAA==
+  dependencies:
+    buffer "^5.4.3"
 
 react-native-dotenv@3.4.11:
   version "3.4.11"
