@@ -403,52 +403,123 @@ export async function exportReportPdf(opts: {
   storeName: string;
 }) {
   const txs = await listTransactions({ from: opts.from, to: opts.to, limit: 1000 });
-  const total = txs.reduce((s, t) => s + t.total, 0);
-  const discount = txs.reduce((s, t) => s + t.discount, 0);
-  const rows = txs
-    .map(
-      (t) => `
-    <tr>
-      <td>${new Date(t.created_at).toLocaleString("id-ID")}</td>
-      <td>${t.code}</td>
-      <td>${t.cashier_name}</td>
-      <td>${t.customer_name ?? "-"}</td>
-      <td>${t.payment_method}</td>
-      <td style="text-align:right">${fmtRp(t.total)}</td>
-    </tr>`
-    )
+  const normalTxs = txs.filter((t) => t.status === "NORMAL");
+  const voidTxs   = txs.filter((t) => t.status === "VOID");
+  const total     = normalTxs.reduce((s, t) => s + t.total, 0);
+  const discount  = normalTxs.reduce((s, t) => s + t.discount, 0);
+  const tax       = normalTxs.reduce((s, t) => s + t.tax, 0);
+  const avgTx     = normalTxs.length ? Math.round(total / normalTxs.length) : 0;
+
+  // Rekap per metode bayar
+  const payBreak: Record<string, number> = {};
+  normalTxs.forEach((t) => { payBreak[t.payment_method] = (payBreak[t.payment_method] || 0) + t.total; });
+  const payRows = Object.entries(payBreak)
+    .sort((a, b) => b[1] - a[1])
+    .map(([m, v]) => `<tr><td>${m}</td><td style="text-align:right;font-weight:700">${fmtRp(v)}</td><td style="text-align:right;color:#666">${((v/total)*100).toFixed(1)}%</td></tr>`)
     .join("");
+
+  const txRows = txs.map((t) => {
+    const isVoid = t.status === "VOID";
+    return `<tr style="${isVoid ? "opacity:0.5;text-decoration:line-through" : ""}">
+      <td style="font-size:11px">${new Date(t.created_at).toLocaleString("id-ID")}</td>
+      <td style="font-weight:700;font-size:11px">${t.code}</td>
+      <td style="font-size:11px">${t.cashier_name}</td>
+      <td style="font-size:11px">${t.customer_name ?? "-"}</td>
+      <td style="font-size:11px">${t.payment_method}</td>
+      <td style="text-align:right;font-weight:700;font-size:11px;color:${isVoid ? "#BA1A1A" : "#2E7D32"}">${isVoid ? "VOID" : fmtRp(t.total)}</td>
+    </tr>`;
+  }).join("");
+
+  const now = new Date().toLocaleString("id-ID");
   const html = `<!doctype html><html><head><meta charset="utf-8"/>
-    <style>
-      body { font-family: -apple-system, sans-serif; padding: 24px; color:#1D1B20; }
-      h1 { color:#2E7D32; margin:0 }
-      .sub { color:#777; margin:4px 0 16px }
-      table { width:100%; border-collapse:collapse; margin-top:12px; font-size:12px }
-      th { background:#2E7D32; color:#fff; text-align:left; padding:8px }
-      td { padding:8px; border-bottom:1px solid #eee }
-      .totals { margin-top:18px; text-align:right; font-weight:700 }
-      .totals span { color:#2E7D32; font-size:18px }
-      .footer { margin-top:24px; text-align:center; color:#999; font-size:11px }
-    </style></head><body>
-    <h1>${opts.storeName}</h1>
-    <div class="sub">Laporan Penjualan • ${opts.periodLabel}</div>
-    <div class="sub">Dicetak ${new Date().toLocaleString("id-ID")}</div>
-    <table>
-      <tr><th>Tanggal</th><th>No</th><th>Kasir</th><th>Pelanggan</th><th>Bayar</th><th style="text-align:right">Total</th></tr>
-      ${rows || "<tr><td colspan='6' style='text-align:center;color:#999'>Tidak ada transaksi</td></tr>"}
-    </table>
-    <div class="totals">
-      Total Transaksi: ${txs.length} &nbsp;•&nbsp;
-      Diskon: ${fmtRp(discount)} &nbsp;•&nbsp;
-      <span>Total Pendapatan: ${fmtRp(total)}</span>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif; background: #f5f5f5; color: #1a1a1a; }
+    .page { background: white; max-width: 800px; margin: 0 auto; }
+    /* Header */
+    .header { background: linear-gradient(135deg, #1B5E20, #2E7D32); color: white; padding: 32px; }
+    .header-top { display: flex; justify-content: space-between; align-items: flex-start; }
+    .store-name { font-size: 26px; font-weight: 800; letter-spacing: -0.5px; }
+    .store-sub { font-size: 13px; opacity: 0.8; margin-top: 4px; }
+    .report-label { text-align: right; }
+    .report-label .period { font-size: 18px; font-weight: 700; }
+    .report-label .date { font-size: 11px; opacity: 0.75; margin-top: 4px; }
+    /* Stats grid */
+    .stats { display: flex; border-bottom: 1px solid rgba(255,255,255,0.2); margin-top: 24px; padding-top: 20px; gap: 0; }
+    .stat { flex: 1; text-align: center; border-right: 1px solid rgba(255,255,255,0.2); padding: 0 16px; }
+    .stat:last-child { border-right: none; }
+    .stat-val { font-size: 20px; font-weight: 800; }
+    .stat-lbl { font-size: 10px; opacity: 0.7; margin-top: 3px; text-transform: uppercase; letter-spacing: 0.5px; }
+    /* Body */
+    .body { padding: 28px; }
+    /* Section */
+    .section { margin-bottom: 28px; }
+    .section-title { font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; color: #2E7D32; border-bottom: 2px solid #2E7D32; padding-bottom: 6px; margin-bottom: 14px; }
+    /* Summary cards */
+    .cards { display: flex; gap: 12px; margin-bottom: 28px; }
+    .card { flex: 1; background: #f9f9f9; border: 1px solid #eee; border-radius: 10px; padding: 16px; }
+    .card-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: #888; }
+    .card-val { font-size: 18px; font-weight: 800; color: #1a1a1a; margin-top: 4px; }
+    .card-val.green { color: #2E7D32; }
+    .card-val.red { color: #BA1A1A; }
+    /* Tables */
+    table { width: 100%; border-collapse: collapse; }
+    th { background: #2E7D32; color: white; text-align: left; padding: 10px 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; }
+    td { padding: 9px 12px; border-bottom: 1px solid #f0f0f0; font-size: 12px; }
+    tr:last-child td { border-bottom: none; }
+    tr:nth-child(even) td { background: #fafafa; }
+    /* Footer */
+    .footer { background: #f9f9f9; border-top: 1px solid #eee; padding: 16px 28px; display: flex; justify-content: space-between; align-items: center; }
+    .footer-brand { color: #2E7D32; font-weight: 800; font-size: 12px; }
+    .footer-note { color: #aaa; font-size: 10px; }
+  </style>
+  </head><body><div class="page">
+    <div class="header">
+      <div class="header-top">
+        <div>
+          <div class="store-name">☕ ${opts.storeName}</div>
+          <div class="store-sub">Laporan Penjualan</div>
+        </div>
+        <div class="report-label">
+          <div class="period">${opts.periodLabel}</div>
+          <div class="date">Dicetak ${now}</div>
+        </div>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="stat-val">${fmtRp(total)}</div><div class="stat-lbl">Total Pendapatan</div></div>
+        <div class="stat"><div class="stat-val">${normalTxs.length}</div><div class="stat-lbl">Transaksi</div></div>
+        <div class="stat"><div class="stat-val">${fmtRp(avgTx)}</div><div class="stat-lbl">Rata-rata</div></div>
+        <div class="stat"><div class="stat-val">${voidTxs.length}</div><div class="stat-lbl">Dibatalkan</div></div>
+      </div>
     </div>
-    <div class="footer">Dibuat dengan Cemara Kopi POS</div>
-  </body></html>`;
-  const { uri } = await Print.printToFileAsync({ html });
+    <div class="body">
+      <div class="cards">
+        <div class="card"><div class="card-label">Pendapatan Bersih</div><div class="card-val green">${fmtRp(total)}</div></div>
+        <div class="card"><div class="card-label">Total Diskon</div><div class="card-val red">- ${fmtRp(discount)}</div></div>
+        <div class="card"><div class="card-label">Pajak Terkumpul</div><div class="card-val">${fmtRp(tax)}</div></div>
+      </div>
+      ${payRows ? `<div class="section">
+        <div class="section-title">Rekap Metode Pembayaran</div>
+        <table><thead><tr><th>Metode</th><th style="text-align:right">Total</th><th style="text-align:right">%</th></tr></thead>
+        <tbody>${payRows}</tbody></table>
+      </div>` : ""}
+      <div class="section">
+        <div class="section-title">Daftar Transaksi (${txs.length} data)</div>
+        <table><thead><tr><th>Tanggal</th><th>No. Invoice</th><th>Kasir</th><th>Pelanggan</th><th>Bayar</th><th style="text-align:right">Total</th></tr></thead>
+        <tbody>${txRows || `<tr><td colspan="6" style="text-align:center;color:#aaa;padding:24px">Tidak ada transaksi</td></tr>`}</tbody></table>
+      </div>
+    </div>
+    <div class="footer">
+      <div class="footer-brand">Cemara Kopi POS</div>
+      <div class="footer-note">Dokumen ini dibuat secara otomatis • ${now}</div>
+    </div>
+  </div></body></html>`;
+
+  const { uri } = await Print.printToFileAsync({ html, base64: false });
   if (await Sharing.isAvailableAsync()) {
     await Sharing.shareAsync(uri, {
       mimeType: "application/pdf",
-      dialogTitle: "Bagikan Laporan PDF",
+      dialogTitle: "Download / Bagikan Laporan PDF",
     });
   }
 }

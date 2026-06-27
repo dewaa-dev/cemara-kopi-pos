@@ -70,6 +70,16 @@ export async function findUser(username: string, password: string) {
   );
 }
 
+export async function listUsers(): Promise<User[]> {
+  const d = await getDb();
+  return d.getAllAsync<User>("SELECT * FROM users ORDER BY role DESC, name ASC");
+}
+
+export async function updatePassword(userId: string, newPassword: string): Promise<void> {
+  const d = await getDb();
+  await d.runAsync("UPDATE users SET password=? WHERE id=?", [newPassword, userId]);
+}
+
 // ----- CATEGORIES -----
 export async function listCategories(): Promise<Category[]> {
   const d = await getDb();
@@ -159,6 +169,42 @@ export async function upsertProduct(p: Partial<Product> & { name: string }) {
 export async function deleteProduct(id: string) {
   const d = await getDb();
   await d.runAsync("DELETE FROM products WHERE id=?", [id]);
+}
+
+// ----- PRODUCT VARIANTS -----
+export type ProductVariant = {
+  id: string;
+  product_id: string;
+  name: string;
+  sort_order: number;
+};
+
+export async function listVariants(productId: string): Promise<ProductVariant[]> {
+  const d = await getDb();
+  return d.getAllAsync<ProductVariant>(
+    "SELECT * FROM product_variants WHERE product_id=? ORDER BY sort_order, name",
+    [productId]
+  );
+}
+
+export async function upsertVariants(productId: string, names: string[]): Promise<void> {
+  const d = await getDb();
+  await d.withTransactionAsync(async () => {
+    await d.runAsync("DELETE FROM product_variants WHERE product_id=?", [productId]);
+    for (let i = 0; i < names.length; i++) {
+      const name = names[i].trim();
+      if (!name) continue;
+      await d.runAsync(
+        "INSERT INTO product_variants (id, product_id, name, sort_order) VALUES (?,?,?,?)",
+        [`var_${Date.now().toString(36)}_${i}`, productId, name, i]
+      );
+    }
+  });
+}
+
+export async function deleteVariants(productId: string): Promise<void> {
+  const d = await getDb();
+  await d.runAsync("DELETE FROM product_variants WHERE product_id=?", [productId]);
 }
 
 // ----- SETTINGS -----

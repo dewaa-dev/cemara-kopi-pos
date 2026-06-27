@@ -15,7 +15,7 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useFocusEffect } from "expo-router";
 import { COLORS, RADII, SHADOW, SPACING } from "@/src/theme";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
-import { getSettings, setSetting } from "@/src/db/repo";
+import { getSettings, setSetting, listUsers, updatePassword, findUser, User } from "@/src/db/repo";
 import { resetDemoData, verifyAdminPin } from "@/src/db/audit";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { useToast } from "@/src/components/Toast";
@@ -43,10 +43,29 @@ export default function Settings() {
   const [withBackup, setWithBackup] = useState(true);
   const [resetBusy, setResetBusy] = useState(false);
 
+  // Ubah Sandi state
+  const [showPassword, setShowPassword] = useState(false);
+  // target: "self" = ganti sandi sendiri, "kasir" = admin ganti sandi kasir
+  const [pwTarget, setPwTarget] = useState<"self" | "kasir">("self");
+  const [users, setUsers] = useState<User[]>([]);
+  const [selectedKasir, setSelectedKasir] = useState<User | null>(null);
+  const [pwStep, setPwStep] = useState<1 | 2>(1); // step 1: verif lama, step 2: isi baru
+  const [pwOld, setPwOld] = useState("");
+  const [pwNew, setPwNew] = useState("");
+  const [pwConfirm, setPwConfirm] = useState("");
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwShowOld, setPwShowOld] = useState(false);
+  const [pwShowNew, setPwShowNew] = useState(false);
+  const [pwShowConfirm, setPwShowConfirm] = useState(false);
+
   const load = useCallback(async () => {
     const s = await getSettings();
     setSettings(s);
-  }, []);
+    if (isAdmin) {
+      const u = await listUsers();
+      setUsers(u);
+    }
+  }, [isAdmin]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -90,6 +109,62 @@ export default function Settings() {
     }
   };
 
+  const openPasswordModal = (target: "self" | "kasir", kasir?: User) => {
+    setPwTarget(target);
+    setSelectedKasir(kasir ?? null);
+    setPwOld(""); setPwNew(""); setPwConfirm("");
+    setPwStep(target === "kasir" ? 2 : 1); // ganti kasir langsung ke step 2
+    setPwShowOld(false); setPwShowNew(false); setPwShowConfirm(false);
+    setShowPassword(true);
+  };
+
+  const doChangePassword = async () => {
+    if (!user) return;
+
+    // Validasi
+    if (pwNew.length < 6) {
+      toast.show("Sandi baru minimal 6 karakter", "error");
+      return;
+    }
+    if (pwNew !== pwConfirm) {
+      toast.show("Konfirmasi sandi tidak cocok", "error");
+      return;
+    }
+
+    setPwBusy(true);
+    try {
+      if (pwTarget === "self") {
+        // Verifikasi sandi lama
+        const check = await findUser(user.username, pwOld);
+        if (!check) {
+          toast.show("Sandi lama salah", "error");
+          setPwBusy(false);
+          return;
+        }
+        await updatePassword(user.id, pwNew);
+        toast.show("Sandi berhasil diubah", "success");
+      } else {
+        // Admin ganti sandi kasir — verifikasi PIN admin (sandi admin sendiri)
+        const check = await findUser(user.username, pwOld);
+        if (!check) {
+          toast.show("PIN Admin salah", "error");
+          setPwBusy(false);
+          return;
+        }
+        if (!selectedKasir) return;
+        await updatePassword(selectedKasir.id, pwNew);
+        toast.show(`Sandi ${selectedKasir.name} berhasil diubah`, "success");
+      }
+      setShowPassword(false);
+    } catch (e: any) {
+      toast.show("Gagal: " + (e?.message || ""), "error");
+    } finally {
+      setPwBusy(false);
+    }
+  };
+
+  const kasirList = users.filter((u) => u.role === "kasir");
+
   return (
     <View style={[styles.container, { backgroundColor: c.surface }]}>
       <ScreenHeader title="Pengaturan Toko" subtitle="Identitas & konfigurasi" showBack testID="settings-header" />
@@ -124,6 +199,52 @@ export default function Settings() {
             <MaterialCommunityIcons name="chevron-right" size={20} color={c.onSurfaceMuted} />
           </Pressable>
         ))}
+
+        <Text style={[styles.section, { color: c.onSurfaceMuted }]}>Akun & Keamanan</Text>
+
+        {/* Ubah Sandi Sendiri */}
+        <Pressable
+          onPress={() => openPasswordModal("self")}
+          android_ripple={{ color: c.brandSoft }}
+          style={[styles.row, { backgroundColor: c.surfaceSecondary }]}
+        >
+          <View style={[styles.rowIcon, { backgroundColor: c.brandSoft }]}>
+            <MaterialCommunityIcons name="lock-reset" size={20} color={c.brand} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: c.onSurfaceMuted, fontSize: 11, fontWeight: "700" }}>UBAH SANDI SAYA</Text>
+            <Text style={{ color: c.onSurface, fontSize: 14, marginTop: 2 }}>
+              {user?.name} ({user?.role})
+            </Text>
+          </View>
+          <MaterialCommunityIcons name="chevron-right" size={20} color={c.onSurfaceMuted} />
+        </Pressable>
+
+        {/* Admin: Ubah Sandi Kasir */}
+        {isAdmin && kasirList.length > 0 && (
+          <>
+            <Text style={{ color: c.onSurfaceMuted, fontSize: 11, fontWeight: "700", marginTop: 4, marginBottom: 6, marginLeft: 2 }}>
+              SANDI KASIR
+            </Text>
+            {kasirList.map((k) => (
+              <Pressable
+                key={k.id}
+                onPress={() => openPasswordModal("kasir", k)}
+                android_ripple={{ color: c.brandSoft }}
+                style={[styles.row, { backgroundColor: c.surfaceSecondary }]}
+              >
+                <View style={[styles.rowIcon, { backgroundColor: "#FEF3C7" }]}>
+                  <MaterialCommunityIcons name="account-key" size={20} color="#D97706" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: c.onSurfaceMuted, fontSize: 11, fontWeight: "700" }}>KASIR</Text>
+                  <Text style={{ color: c.onSurface, fontSize: 14, marginTop: 2 }}>{k.name}</Text>
+                </View>
+                <MaterialCommunityIcons name="chevron-right" size={20} color={c.onSurfaceMuted} />
+              </Pressable>
+            ))}
+          </>
+        )}
 
         <Text style={[styles.section, { color: c.onSurfaceMuted }]}>Tentang</Text>
         <View style={[styles.aboutCard, { backgroundColor: c.surfaceSecondary }]}>
@@ -296,6 +417,97 @@ export default function Settings() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+      {/* Modal Ubah Sandi */}
+      <Modal visible={showPassword} transparent animationType="slide" onRequestClose={() => setShowPassword(false)}>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.modalBg}>
+          <View style={[styles.modalSheet, { backgroundColor: c.surface }]}>
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <View>
+                <Text style={[styles.modalTitle, { color: c.onSurface }]}>
+                  {pwTarget === "self" ? "Ubah Sandi Saya" : `Ubah Sandi ${selectedKasir?.name}`}
+                </Text>
+                <Text style={{ color: c.onSurfaceMuted, fontSize: 12, marginTop: 2 }}>
+                  {pwTarget === "kasir" ? "Masukkan PIN admin untuk konfirmasi" : "Verifikasi identitasmu dulu"}
+                </Text>
+              </View>
+              <Pressable onPress={() => setShowPassword(false)} hitSlop={10}>
+                <MaterialCommunityIcons name="close" size={22} color={c.onSurface} />
+              </Pressable>
+            </View>
+
+            {/* Step 1: Sandi Lama / PIN Admin */}
+            <Text style={[styles.pwLabel, { color: c.onSurfaceMuted }]}>
+              {pwTarget === "self" ? "Sandi Lama" : "PIN Admin (sandi akun admin)"}
+            </Text>
+            <View style={styles.pwInputWrap}>
+              <TextInput
+                value={pwOld}
+                onChangeText={setPwOld}
+                placeholder={pwTarget === "self" ? "Masukkan sandi lama" : "Masukkan sandi admin"}
+                placeholderTextColor={c.onSurfaceMuted}
+                secureTextEntry={!pwShowOld}
+                style={[styles.pwInput, { borderColor: c.border, color: c.onSurface }]}
+              />
+              <Pressable onPress={() => setPwShowOld(!pwShowOld)} hitSlop={8} style={styles.pwEye}>
+                <MaterialCommunityIcons name={pwShowOld ? "eye-off" : "eye"} size={20} color={c.onSurfaceMuted} />
+              </Pressable>
+            </View>
+
+            {/* Step 2: Sandi Baru */}
+            <Text style={[styles.pwLabel, { color: c.onSurfaceMuted, marginTop: SPACING.md }]}>Sandi Baru</Text>
+            <View style={styles.pwInputWrap}>
+              <TextInput
+                value={pwNew}
+                onChangeText={setPwNew}
+                placeholder="Minimal 6 karakter"
+                placeholderTextColor={c.onSurfaceMuted}
+                secureTextEntry={!pwShowNew}
+                style={[styles.pwInput, { borderColor: c.border, color: c.onSurface }]}
+              />
+              <Pressable onPress={() => setPwShowNew(!pwShowNew)} hitSlop={8} style={styles.pwEye}>
+                <MaterialCommunityIcons name={pwShowNew ? "eye-off" : "eye"} size={20} color={c.onSurfaceMuted} />
+              </Pressable>
+            </View>
+
+            <Text style={[styles.pwLabel, { color: c.onSurfaceMuted, marginTop: SPACING.sm }]}>Konfirmasi Sandi Baru</Text>
+            <View style={styles.pwInputWrap}>
+              <TextInput
+                value={pwConfirm}
+                onChangeText={setPwConfirm}
+                placeholder="Ulangi sandi baru"
+                placeholderTextColor={c.onSurfaceMuted}
+                secureTextEntry={!pwShowConfirm}
+                style={[styles.pwInput, {
+                  borderColor: pwConfirm && pwNew !== pwConfirm ? c.error : c.border,
+                  color: c.onSurface,
+                }]}
+              />
+              <Pressable onPress={() => setPwShowConfirm(!pwShowConfirm)} hitSlop={8} style={styles.pwEye}>
+                <MaterialCommunityIcons name={pwShowConfirm ? "eye-off" : "eye"} size={20} color={c.onSurfaceMuted} />
+              </Pressable>
+            </View>
+            {pwConfirm && pwNew !== pwConfirm && (
+              <Text style={{ color: c.error, fontSize: 12, marginTop: 4 }}>Sandi tidak cocok</Text>
+            )}
+
+            <Pressable
+              onPress={doChangePassword}
+              disabled={pwBusy || !pwOld || !pwNew || !pwConfirm}
+              android_ripple={{ color: "rgba(255,255,255,0.18)" }}
+              style={[styles.modalCta, {
+                backgroundColor: c.brand,
+                opacity: pwBusy || !pwOld || !pwNew || !pwConfirm ? 0.5 : 1,
+              }]}
+            >
+              {pwBusy
+                ? <ActivityIndicator color="#fff" />
+                : <Text style={styles.modalCtaText}>Simpan Sandi</Text>
+              }
+            </Pressable>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
@@ -346,4 +558,8 @@ const styles = StyleSheet.create({
     marginTop: SPACING.md,
   },
   cancelBtn: { alignItems: "center", paddingVertical: 14, marginTop: 4 },
+  pwLabel: { fontSize: 11, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 },
+  pwInputWrap: { flexDirection: "row", alignItems: "center", position: "relative" },
+  pwInput: { flex: 1, borderWidth: 1, borderRadius: RADII.md, paddingHorizontal: SPACING.md, paddingRight: 48, fontSize: 14, height: 48 },
+  pwEye: { position: "absolute", right: 12 },
 });

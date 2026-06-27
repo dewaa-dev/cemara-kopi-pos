@@ -25,6 +25,9 @@ import {
   listProducts,
   Product,
   upsertProduct,
+  listVariants,
+  upsertVariants,
+  ProductVariant,
 } from "@/src/db/repo";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { useToast } from "@/src/components/Toast";
@@ -40,6 +43,7 @@ export default function Products() {
   const [items, setItems] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Partial<Product> | null>(null);
+  const [variantFor, setVariantFor] = useState<Product | null>(null);
   const debounceRef = useRef<any>(null);
 
   const load = useCallback(async () => {
@@ -156,6 +160,13 @@ export default function Products() {
                       <MaterialCommunityIcons name="pencil-outline" size={18} color={c.info} />
                     </Pressable>
                     <Pressable
+                      testID={`variant-${item.id}`}
+                      onPress={() => setVariantFor(item)}
+                      hitSlop={6}
+                    >
+                      <MaterialCommunityIcons name="format-list-bulleted" size={18} color={c.accent} />
+                    </Pressable>
+                    <Pressable
                       testID={`delete-${item.id}`}
                       onPress={() => onDelete(item)}
                       hitSlop={6}
@@ -212,6 +223,22 @@ export default function Products() {
             setEditing(null);
             load();
             toast.show("Tersimpan", "success");
+          }}
+        />
+      </Modal>
+
+      <Modal
+        visible={!!variantFor}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setVariantFor(null)}
+      >
+        <VariantManager
+          product={variantFor}
+          onClose={() => setVariantFor(null)}
+          onSaved={() => {
+            setVariantFor(null);
+            toast.show("Varian tersimpan", "success");
           }}
         />
       </Modal>
@@ -423,6 +450,186 @@ const ProductForm = ({
   );
 };
 
+// ─── VariantManager ───────────────────────────────────────────────────────────
+const VariantManager = ({
+  product,
+  onClose,
+  onSaved,
+}: {
+  product: Product | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) => {
+  const c = COLORS.light;
+  const [variants, setVariants] = useState<ProductVariant[]>([]);
+  const [newName, setNewName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!product) return;
+    setLoading(true);
+    listVariants(product.id).then((v) => {
+      setVariants(v);
+      setLoading(false);
+    });
+    setNewName("");
+  }, [product?.id]);
+
+  if (!product) return null;
+
+  const addVariant = () => {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+    // Cek duplikat
+    if (variants.some((v) => v.name.toLowerCase() === trimmed.toLowerCase())) return;
+    setVariants((prev) => [
+      ...prev,
+      { id: `temp_${Date.now()}`, product_id: product.id, name: trimmed, sort_order: prev.length },
+    ]);
+    setNewName("");
+  };
+
+  const removeVariant = (id: string) => {
+    setVariants((prev) => prev.filter((v) => v.id !== id));
+  };
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      await upsertVariants(product.id, variants.map((v) => v.name));
+      onSaved();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Preset varian cepat berdasarkan kategori
+  const getPresets = () => {
+    if (product.category_id === "cat_minuman") {
+      return ["Pahit", "Manis", "Biasa", "Extra Manis", "Tanpa Gula"];
+    }
+    if (product.category_id === "cat_mie") {
+      return ["Pedas", "Tidak Pedas", "Extra Pedas", "Kuah", "Goreng"];
+    }
+    return ["Regular", "Large", "Extra"];
+  };
+
+  const addPreset = (name: string) => {
+    if (variants.some((v) => v.name.toLowerCase() === name.toLowerCase())) return;
+    setVariants((prev) => [
+      ...prev,
+      { id: `temp_${Date.now()}`, product_id: product.id, name, sort_order: prev.length },
+    ]);
+  };
+
+  return (
+    <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.modalBg}>
+      <View style={[styles.modalSheet, { backgroundColor: c.surface, maxHeight: "85%" }]}>
+        <View style={styles.modalHandle} />
+        <View style={styles.modalHeader}>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.modalTitle, { color: c.onSurface }]}>Kelola Varian</Text>
+            <Text style={{ color: c.onSurfaceMuted, fontSize: 12, marginTop: 2 }} numberOfLines={1}>
+              {product.name}
+            </Text>
+          </View>
+          <Pressable onPress={onClose} hitSlop={10}>
+            <MaterialCommunityIcons name="close" size={22} color={c.onSurface} />
+          </Pressable>
+        </View>
+
+        {/* Preset cepat */}
+        <Text style={[styles.variantLabel, { color: c.onSurfaceMuted }]}>Tambah Cepat</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}
+          contentContainerStyle={{ gap: 8, paddingRight: 8 }}>
+          {getPresets().map((p) => {
+            const already = variants.some((v) => v.name.toLowerCase() === p.toLowerCase());
+            return (
+              <Pressable
+                key={p}
+                onPress={() => addPreset(p)}
+                disabled={already}
+                style={[styles.presetChip, {
+                  backgroundColor: already ? c.surfaceTertiary : c.brandSoft,
+                  borderColor: already ? c.border : c.brand,
+                  opacity: already ? 0.5 : 1,
+                }]}
+              >
+                <MaterialCommunityIcons name={already ? "check" : "plus"} size={13} color={already ? c.onSurfaceMuted : c.brand} />
+                <Text style={{ color: already ? c.onSurfaceMuted : c.brand, fontSize: 12, fontWeight: "700" }}>{p}</Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+
+        {/* Input manual */}
+        <Text style={[styles.variantLabel, { color: c.onSurfaceMuted }]}>Tambah Manual</Text>
+        <View style={{ flexDirection: "row", gap: 8, marginBottom: 12 }}>
+          <TextInput
+            value={newName}
+            onChangeText={setNewName}
+            placeholder="Nama varian baru..."
+            placeholderTextColor={c.onSurfaceMuted}
+            style={[styles.input, { flex: 1, borderColor: c.border, color: c.onSurface, height: 44 }]}
+            onSubmitEditing={addVariant}
+            returnKeyType="done"
+          />
+          <Pressable
+            onPress={addVariant}
+            disabled={!newName.trim()}
+            style={[styles.addVarBtn, { backgroundColor: newName.trim() ? c.brand : c.border }]}
+          >
+            <MaterialCommunityIcons name="plus" size={22} color="#fff" />
+          </Pressable>
+        </View>
+
+        {/* Daftar varian */}
+        <Text style={[styles.variantLabel, { color: c.onSurfaceMuted }]}>
+          Varian Aktif ({variants.length})
+        </Text>
+        {loading ? (
+          <ActivityIndicator color={c.brand} style={{ paddingVertical: 20 }} />
+        ) : (
+          <ScrollView style={{ maxHeight: 200 }} showsVerticalScrollIndicator={false}>
+            {variants.length === 0 ? (
+              <Text style={{ color: c.onSurfaceMuted, fontSize: 13, textAlign: "center", paddingVertical: 16 }}>
+                Belum ada varian — produk ini langsung masuk keranjang
+              </Text>
+            ) : (
+              variants.map((v, i) => (
+                <View key={v.id} style={[styles.variantItem, { borderColor: c.border, backgroundColor: c.surfaceSecondary }]}>
+                  <View style={[styles.variantBadge, { backgroundColor: c.brandSoft }]}>
+                    <Text style={{ color: c.brand, fontSize: 11, fontWeight: "800" }}>{i + 1}</Text>
+                  </View>
+                  <Text style={{ flex: 1, color: c.onSurface, fontWeight: "600" }}>{v.name}</Text>
+                  <Pressable onPress={() => removeVariant(v.id)} hitSlop={8}>
+                    <MaterialCommunityIcons name="close-circle" size={20} color={c.error} />
+                  </Pressable>
+                </View>
+              ))
+            )}
+          </ScrollView>
+        )}
+
+        <Pressable
+          onPress={save}
+          disabled={busy}
+          android_ripple={{ color: "rgba(255,255,255,0.18)" }}
+          style={[styles.modalCta, { backgroundColor: c.brand, opacity: busy ? 0.7 : 1, marginTop: 12 }]}
+        >
+          {busy
+            ? <ActivityIndicator color="#fff" />
+            : <Text style={styles.modalCtaText}>Simpan Varian</Text>
+          }
+        </Pressable>
+      </View>
+    </KeyboardAvoidingView>
+  );
+};
+
+// ─── FieldLabel ───────────────────────────────────────────────────────────────
+  // ─── FieldLabel ───────────────────────────────────────────────────────────────
 const FieldLabel = ({ children }: { children: React.ReactNode }) => (
   <Text style={{ color: COLORS.light.onSurfaceMuted, fontSize: 11, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.4, marginTop: 6 }}>
     {children}
@@ -542,4 +749,9 @@ const styles = StyleSheet.create({
     padding: 4,
     borderRadius: 12,
   },
+  variantLabel: { fontSize: 11, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 },
+  presetChip: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 20, borderWidth: 1 },
+  addVarBtn: { width: 44, height: 44, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  variantItem: { flexDirection: "row", alignItems: "center", gap: 10, padding: 10, borderRadius: 10, borderWidth: 1, marginBottom: 6 },
+  variantBadge: { width: 24, height: 24, borderRadius: 12, alignItems: "center", justifyContent: "center" },
 });

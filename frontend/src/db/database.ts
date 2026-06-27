@@ -258,6 +258,16 @@ async function migrate(d: SQLite.SQLiteDatabase) {
     );
 
     CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
+
+    CREATE TABLE IF NOT EXISTS product_variants (
+      id TEXT PRIMARY KEY,
+      product_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_variants_product ON product_variants(product_id);
   `);
 
   // ALTER TABLE migrations for existing databases (idempotent)
@@ -337,6 +347,36 @@ async function seedIfEmpty(d: SQLite.SQLiteDatabase) {
         s.key,
         s.value,
       ]);
+    }
+  }
+
+  // Seed product variants
+  const variantCount = await d.getFirstAsync<{ c: number }>(
+    "SELECT COUNT(*) as c FROM product_variants"
+  );
+  if ((variantCount?.c ?? 0) === 0) {
+    const VARIANT_SEED: { productName: string; variants: string[] }[] = [
+      { productName: "Susu Soda Jumbo", variants: ["Fanta Merah", "Fanta Putih"] },
+      { productName: "HiLo", variants: ["Chocolate Banana", "Chocolate"] },
+      { productName: "Nutrisari", variants: ["Jeruk Peras", "Jeruk Nipis", "Sweet Orange", "Lemon Tea", "Es Cincau", "Blewah", "Leci", "Anggur", "Jambu", "Kelapa Muda", "Cocopandan", "Markisa", "Sirsak", "Melon", "Semangka"] },
+      { productName: "Dancow", variants: ["Putih", "Cokelat"] },
+      { productName: "Chocolatos", variants: ["Chocolate", "Chocolate Cream", "Matcha/Green Tea", "Chocolate Hazelnut", "Dark Chocolate"] },
+      { productName: "Good Day", variants: ["Cappuccino", "Chococinno", "Coolin", "Freeze", "Carrebian Nut", "Vanilla Latte", "Mocacinno"] },
+      { productName: "Pop Ice", variants: ["Cokelat", "Cokelat Susu", "Choco Cookies", "Choco Cheese", "Vanilla Blue", "Bubble Gum", "Taro", "Avocado", "Durian", "Mangga", "Melon", "Stroberi", "Blueberry", "Anggur", "Leci", "Alpukat", "Cappuccino", "Moccacino", "Permen Kapas Karet", "Popcorn Caramel", "Italian Cioccolato"] },
+    ];
+
+    for (const entry of VARIANT_SEED) {
+      const prod = await d.getFirstAsync<{ id: string }>(
+        "SELECT id FROM products WHERE LOWER(name)=LOWER(?)",
+        [entry.productName]
+      );
+      if (!prod) continue;
+      for (let i = 0; i < entry.variants.length; i++) {
+        await d.runAsync(
+          "INSERT INTO product_variants (id, product_id, name, sort_order) VALUES (?,?,?,?)",
+          [`var_${prod.id}_${i}`, prod.id, entry.variants[i], i]
+        );
+      }
     }
   }
 }

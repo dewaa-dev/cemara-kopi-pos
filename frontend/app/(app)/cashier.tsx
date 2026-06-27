@@ -26,7 +26,9 @@ import {
   listCategories,
   listProducts,
   listToppings,
+  listVariants,
   Product,
+  ProductVariant,
 } from "@/src/db/repo";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { useToast } from "@/src/components/Toast";
@@ -67,6 +69,7 @@ export default function Cashier() {
   const [storeName, setStoreName] = useState("Cemara Kopi");
 
   const [toppingFor, setToppingFor] = useState<Product | null>(null);
+  const [variantFor, setVariantFor] = useState<{ product: Product; variants: ProductVariant[] } | null>(null);
   const [showCheckout, setShowCheckout] = useState(false);
   const [showReceipt, setShowReceipt] = useState<any>(null);
 
@@ -152,12 +155,24 @@ export default function Cashier() {
     };
   }, [search, activeCat, loadProducts]);
 
-  const addToCart = (p: Product) => {
-    const isMie = p.id.startsWith("prod_mie_");
+  const addToCart = async (p: Product) => {
+    const isMie = p.id.startsWith("prod_mie_") || p.category_id === "cat_mie";
     if (isMie) {
       setToppingFor(p);
       return;
     }
+
+    // Cek apakah produk punya varian
+    try {
+      const variants = await listVariants(p.id);
+      if (variants.length > 0) {
+        setVariantFor({ product: p, variants });
+        return;
+      }
+    } catch (e) {
+      console.error("[Cashier] listVariants error:", e);
+    }
+
     setCart((prev) => {
       const idx = prev.findIndex((l) => l.productId === p.id && l.toppings.length === 0);
       if (idx >= 0) {
@@ -408,6 +423,31 @@ export default function Cashier() {
         </Pressable>
       )}
 
+      {/* Variant picker modal */}
+      <Modal visible={!!variantFor} animationType="slide" transparent onRequestClose={() => setVariantFor(null)}>
+        <VariantPicker
+          product={variantFor?.product ?? null}
+          variants={variantFor?.variants ?? []}
+          onClose={() => setVariantFor(null)}
+          onAdd={(variantName) => {
+            if (!variantFor) return;
+            const p = variantFor.product;
+            const displayName = `${p.name} - ${variantName}`;
+            setCart((prev) => {
+              const idx = prev.findIndex((l) => l.productId === p.id && l.productName === displayName);
+              if (idx >= 0) {
+                const c2 = [...prev];
+                c2[idx] = { ...c2[idx], qty: c2[idx].qty + 1 };
+                return c2;
+              }
+              return [...prev, { productId: p.id, productName: displayName, price: p.sell_price, qty: 1, toppings: [] }];
+            });
+            setVariantFor(null);
+            toast.show(`+ ${displayName}`, "success");
+          }}
+        />
+      </Modal>
+
       {/* Topping modal */}
       <Modal visible={!!toppingFor} animationType="slide" transparent onRequestClose={() => setToppingFor(null)}>
         <ToppingPicker
@@ -502,6 +542,79 @@ const Chip = ({ label, active, onPress, testID }: {
         {label}
       </Text>
     </Pressable>
+  );
+};
+
+// ─── VariantPicker ────────────────────────────────────────────────────────────
+const VariantPicker = ({ product, variants, onClose, onAdd }: {
+  product: Product | null;
+  variants: ProductVariant[];
+  onClose: () => void;
+  onAdd: (variantName: string) => void;
+}) => {
+  const c = COLORS.light;
+  const [selected, setSelected] = useState<string | null>(null);
+
+  useEffect(() => { setSelected(null); }, [product?.id]);
+  if (!product) return null;
+
+  return (
+    <View style={styles.modalBg}>
+      <View style={[styles.modalSheet, { backgroundColor: c.surface, maxHeight: "80%" }]}>
+        <View style={styles.modalHandle} />
+        <View style={styles.modalHeader}>
+          <View>
+            <Text style={[styles.modalTitle, { color: c.onSurface }]}>{product.name}</Text>
+            <Text style={[styles.modalSub, { color: c.onSurfaceMuted }]}>Pilih varian</Text>
+          </View>
+          <Pressable onPress={onClose} hitSlop={10}>
+            <MaterialCommunityIcons name="close" size={22} color={c.onSurface} />
+          </Pressable>
+        </View>
+        <ScrollView style={{ marginTop: SPACING.md }} showsVerticalScrollIndicator={false}>
+          {variants.map((v) => {
+            const isSelected = selected === v.name;
+            return (
+              <Pressable
+                key={v.id}
+                onPress={() => setSelected(v.name)}
+                android_ripple={{ color: c.brandSoft }}
+                style={[styles.variantRow, {
+                  borderColor: isSelected ? c.brand : c.border,
+                  backgroundColor: isSelected ? c.brandSoft : c.surface,
+                }]}
+              >
+                <View style={[styles.variantRadio, {
+                  borderColor: isSelected ? c.brand : c.onSurfaceMuted,
+                  backgroundColor: isSelected ? c.brand : "transparent",
+                }]}>
+                  {isSelected && <View style={styles.variantRadioDot} />}
+                </View>
+                <Text style={[styles.variantName, { color: isSelected ? c.brand : c.onSurface }]}>
+                  {v.name}
+                </Text>
+                {isSelected && (
+                  <MaterialCommunityIcons name="check-circle" size={18} color={c.brand} />
+                )}
+              </Pressable>
+            );
+          })}
+          <View style={{ height: 16 }} />
+        </ScrollView>
+        <Pressable
+          onPress={() => selected && onAdd(selected)}
+          android_ripple={{ color: "rgba(255,255,255,0.18)" }}
+          style={[styles.modalCta, {
+            backgroundColor: selected ? c.brand : c.border,
+            opacity: selected ? 1 : 0.5,
+          }]}
+        >
+          <Text style={styles.modalCtaText}>
+            {selected ? `Tambahkan ${product.name} - ${selected}` : "Pilih varian dulu"}
+          </Text>
+        </Pressable>
+      </View>
+    </View>
   );
 };
 
@@ -832,46 +945,132 @@ const ReceiptView = ({ data, onClose }: { data: any; onClose: () => void }) => {
     );
   };
 
+  const dateStr = new Date(data.date).toLocaleString("id-ID", {
+    day: "2-digit", month: "long", year: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
+
   return (
     <View style={styles.modalBg}>
       <View style={[styles.modalSheet, { backgroundColor: c.surface, maxHeight: "92%" }]}>
         <View style={styles.modalHandle} />
-        <ScrollView>
-          <View style={[styles.receiptInner, { backgroundColor: c.surfaceSecondary }]}>
-            <Text style={[styles.rTitle, { color: c.onSurface }]}>{data.store}</Text>
-            <Text style={[styles.rSub, { color: c.onSurfaceMuted }]}>{new Date(data.date).toLocaleString("id-ID")}</Text>
-            <Text style={[styles.rSub, { color: c.onSurfaceMuted }]}>Kasir: {data.cashier}</Text>
-            <Text style={[styles.rSub, { color: c.onSurfaceMuted }]}>No: {data.code}</Text>
-            {data.customer_name ? <Text style={[styles.rSub, { color: c.onSurfaceMuted }]}>Pelanggan: {data.customer_name}</Text> : null}
-            <View style={[styles.dashed, { borderColor: c.border }]} />
-            {data.cart.map((l: CartLine, i: number) => (
-              <View key={i} style={{ marginBottom: 6 }}>
-                <View style={styles.rRow}>
-                  <Text style={{ color: c.onSurface, flex: 1 }} numberOfLines={1}>{l.productName}</Text>
-                  <Text style={{ color: c.onSurface }}>x{l.qty}</Text>
-                  <Text style={{ color: c.onSurface, width: 80, textAlign: "right" }}>{formatRp(l.price * l.qty)}</Text>
-                </View>
-                {l.toppings.map((t) => (
-                  <View key={t.productId} style={styles.rRow}>
-                    <Text style={{ color: c.onSurfaceMuted, flex: 1, fontSize: 12 }}>+ {t.productName} x{t.qty}</Text>
-                    <Text style={{ color: c.onSurfaceMuted, width: 80, textAlign: "right", fontSize: 12 }}>
-                      {formatRp(t.price * t.qty * l.qty)}
-                    </Text>
-                  </View>
-                ))}
+
+        <ScrollView showsVerticalScrollIndicator={false}>
+          {/* Struk profesional */}
+          <View style={[styles.receiptCard, { backgroundColor: "#fff", borderColor: c.border }]}>
+
+            {/* Header struk */}
+            <View style={[styles.receiptHeader, { backgroundColor: c.brand }]}>
+              <MaterialCommunityIcons name="coffee" size={28} color="#fff" />
+              <Text style={styles.receiptStoreName}>{data.store}</Text>
+              <Text style={styles.receiptSubtitle}>Struk Pembayaran</Text>
+            </View>
+
+            {/* Nomor invoice + tanggal */}
+            <View style={[styles.receiptMeta, { borderBottomColor: c.border }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.receiptMetaLabel, { color: c.onSurfaceMuted }]}>No. Invoice</Text>
+                <Text style={[styles.receiptMetaValue, { color: c.onSurface }]}>{data.code}</Text>
               </View>
-            ))}
-            <View style={[styles.dashed, { borderColor: c.border }]} />
-            <RowKV k="Subtotal" v={formatRp(data.subtotal)} />
-            {data.discount > 0 && <RowKV k="Diskon" v={"- " + formatRp(data.discount)} />}
-            {data.tax > 0 && <RowKV k="Pajak" v={formatRp(data.tax)} />}
-            <RowKV k="Total" v={formatRp(data.total)} highlight />
-            <RowKV k={data.payment_method} v={formatRp(data.paid)} />
-            {data.change > 0 && <RowKV k="Kembali" v={formatRp(data.change)} />}
-            <View style={[styles.dashed, { borderColor: c.border }]} />
-            <Text style={{ color: c.onSurfaceMuted, textAlign: "center", fontSize: 12, marginTop: 6 }}>
-              Terima kasih telah berkunjung.{"\n"}Semoga harimu menyenangkan ☕
-            </Text>
+              <View style={{ alignItems: "flex-end" }}>
+                <Text style={[styles.receiptMetaLabel, { color: c.onSurfaceMuted }]}>Tanggal</Text>
+                <Text style={[styles.receiptMetaValue, { color: c.onSurface, fontSize: 11 }]}>{dateStr}</Text>
+              </View>
+            </View>
+
+            {/* Info kasir & pelanggan */}
+            <View style={[styles.receiptInfoRow, { borderBottomColor: c.border }]}>
+              <View style={styles.receiptInfoItem}>
+                <MaterialCommunityIcons name="account-tie" size={13} color={c.onSurfaceMuted} />
+                <Text style={[styles.receiptInfoLabel, { color: c.onSurfaceMuted }]}>Kasir</Text>
+                <Text style={[styles.receiptInfoValue, { color: c.onSurface }]}>{data.cashier}</Text>
+              </View>
+              {data.customer_name ? (
+                <View style={styles.receiptInfoItem}>
+                  <MaterialCommunityIcons name="account" size={13} color={c.onSurfaceMuted} />
+                  <Text style={[styles.receiptInfoLabel, { color: c.onSurfaceMuted }]}>Pelanggan</Text>
+                  <Text style={[styles.receiptInfoValue, { color: c.onSurface }]}>{data.customer_name}</Text>
+                </View>
+              ) : null}
+              <View style={styles.receiptInfoItem}>
+                <MaterialCommunityIcons name="credit-card" size={13} color={c.onSurfaceMuted} />
+                <Text style={[styles.receiptInfoLabel, { color: c.onSurfaceMuted }]}>Bayar</Text>
+                <Text style={[styles.receiptInfoValue, { color: c.onSurface }]}>{data.paymentMethod}</Text>
+              </View>
+            </View>
+
+            {/* Items */}
+            <View style={{ paddingHorizontal: SPACING.lg, paddingTop: SPACING.md }}>
+              <Text style={[styles.receiptSectionLabel, { color: c.onSurfaceMuted }]}>Pesanan</Text>
+              {data.cart.map((l: CartLine, i: number) => (
+                <View key={i} style={{ marginBottom: 10 }}>
+                  <View style={styles.receiptItemRow}>
+                    <View style={[styles.receiptQtyBadge, { backgroundColor: c.brandSoft }]}>
+                      <Text style={{ color: c.brand, fontSize: 11, fontWeight: "800" }}>{l.qty}x</Text>
+                    </View>
+                    <Text style={[styles.receiptItemName, { color: c.onSurface }]} numberOfLines={2}>{l.productName}</Text>
+                    <Text style={[styles.receiptItemPrice, { color: c.onSurface }]}>{formatRp(l.price * l.qty)}</Text>
+                  </View>
+                  {l.toppings.map((t) => (
+                    <View key={t.productId} style={[styles.receiptItemRow, { marginLeft: 32, marginTop: 3 }]}>
+                      <MaterialCommunityIcons name="plus-circle-outline" size={12} color={c.onSurfaceMuted} />
+                      <Text style={{ color: c.onSurfaceMuted, flex: 1, fontSize: 12, marginLeft: 4 }}>
+                        {t.productName} x{t.qty}
+                      </Text>
+                      <Text style={{ color: c.onSurfaceMuted, fontSize: 12 }}>{formatRp(t.price * t.qty * l.qty)}</Text>
+                    </View>
+                  ))}
+                </View>
+              ))}
+            </View>
+
+            {/* Garis putus-putus */}
+            <View style={[styles.receiptDashed, { borderColor: c.border }]} />
+
+            {/* Totals */}
+            <View style={{ paddingHorizontal: SPACING.lg, paddingBottom: SPACING.md, gap: 4 }}>
+              <View style={styles.receiptTotalRow}>
+                <Text style={{ color: c.onSurfaceMuted, fontSize: 13 }}>Subtotal</Text>
+                <Text style={{ color: c.onSurface, fontSize: 13, fontWeight: "600" }}>{formatRp(data.subtotal)}</Text>
+              </View>
+              {data.discount > 0 && (
+                <View style={styles.receiptTotalRow}>
+                  <Text style={{ color: c.onSurfaceMuted, fontSize: 13 }}>Diskon</Text>
+                  <Text style={{ color: c.error, fontSize: 13, fontWeight: "600" }}>- {formatRp(data.discount)}</Text>
+                </View>
+              )}
+              {data.tax > 0 && (
+                <View style={styles.receiptTotalRow}>
+                  <Text style={{ color: c.onSurfaceMuted, fontSize: 13 }}>Pajak</Text>
+                  <Text style={{ color: c.onSurface, fontSize: 13, fontWeight: "600" }}>{formatRp(data.tax)}</Text>
+                </View>
+              )}
+
+              {/* Total besar */}
+              <View style={[styles.receiptGrandTotal, { backgroundColor: c.brandSoft, borderColor: c.brand }]}>
+                <Text style={{ color: c.brand, fontSize: 14, fontWeight: "700" }}>TOTAL</Text>
+                <Text style={{ color: c.brand, fontSize: 22, fontWeight: "800" }}>{formatRp(data.total)}</Text>
+              </View>
+
+              <View style={styles.receiptTotalRow}>
+                <Text style={{ color: c.onSurfaceMuted, fontSize: 13 }}>{data.payment_method}</Text>
+                <Text style={{ color: c.onSurface, fontSize: 13, fontWeight: "600" }}>{formatRp(data.paid)}</Text>
+              </View>
+              {data.change > 0 && (
+                <View style={styles.receiptTotalRow}>
+                  <Text style={{ color: c.onSurfaceMuted, fontSize: 13 }}>Kembali</Text>
+                  <Text style={{ color: c.brand, fontSize: 13, fontWeight: "700" }}>{formatRp(data.change)}</Text>
+                </View>
+              )}
+            </View>
+
+            {/* Footer struk */}
+            <View style={[styles.receiptFooter, { borderTopColor: c.border, backgroundColor: c.surfaceSecondary }]}>
+              <Text style={{ color: c.onSurfaceMuted, textAlign: "center", fontSize: 12, lineHeight: 18 }}>
+                Terima kasih telah berkunjung ☕{"\n"}
+                <Text style={{ fontWeight: "700", color: c.brand }}>{data.store}</Text>
+              </Text>
+            </View>
           </View>
         </ScrollView>
 
@@ -912,7 +1111,6 @@ const ReceiptView = ({ data, onClose }: { data: any; onClose: () => void }) => {
   );
 };
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: { flex: 1 },
   headerBg: { position: "absolute", top: 0, left: 0, right: 0, height: 200 },
@@ -1022,11 +1220,6 @@ const styles = StyleSheet.create({
   totalsCard: { borderRadius: RADII.md, padding: SPACING.md, marginTop: SPACING.lg, gap: 6, ...SHADOW.card },
   kvRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 3 },
   divider: { height: 1, marginVertical: 6 },
-  receiptInner: { padding: SPACING.lg, borderRadius: RADII.md, ...SHADOW.card },
-  rTitle: { fontSize: 18, fontWeight: "800", textAlign: "center" },
-  rSub: { fontSize: 12, textAlign: "center" },
-  dashed: { borderTopWidth: 1, borderStyle: "dashed", marginVertical: 8 },
-  rRow: { flexDirection: "row", alignItems: "center", gap: 4 },
   printErrorBanner: {
     flexDirection: "row", alignItems: "flex-start", gap: 8,
     borderWidth: 1, borderRadius: RADII.md, padding: 10, marginTop: SPACING.md,
@@ -1035,4 +1228,38 @@ const styles = StyleSheet.create({
     flexDirection: "row", alignItems: "center", gap: 8,
     borderRadius: RADII.md, padding: 10, marginTop: SPACING.md,
   },
+  variantRow: {
+    flexDirection: "row", alignItems: "center", gap: SPACING.md,
+    paddingVertical: 14, paddingHorizontal: SPACING.md,
+    borderWidth: 1.5, borderRadius: RADII.md, marginBottom: 8,
+  },
+  variantRadio: {
+    width: 22, height: 22, borderRadius: 11, borderWidth: 2,
+    alignItems: "center", justifyContent: "center",
+  },
+  variantRadioDot: {
+    width: 8, height: 8, borderRadius: 4, backgroundColor: "#fff",
+  },
+  variantName: { flex: 1, fontSize: 14, fontWeight: "600" },
+  // Receipt profesional
+  receiptCard: { borderWidth: 1, borderRadius: RADII.md, overflow: "hidden", marginBottom: SPACING.sm },
+  receiptHeader: { paddingVertical: 20, paddingHorizontal: SPACING.lg, alignItems: "center", gap: 4 },
+  receiptStoreName: { color: "#fff", fontSize: 20, fontWeight: "800", marginTop: 6 },
+  receiptSubtitle: { color: "rgba(255,255,255,0.8)", fontSize: 12 },
+  receiptMeta: { flexDirection: "row", paddingHorizontal: SPACING.lg, paddingVertical: SPACING.md, borderBottomWidth: 1 },
+  receiptMetaLabel: { fontSize: 10, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.4 },
+  receiptMetaValue: { fontSize: 13, fontWeight: "700", marginTop: 2 },
+  receiptInfoRow: { flexDirection: "row", paddingHorizontal: SPACING.lg, paddingVertical: SPACING.md, borderBottomWidth: 1, gap: SPACING.md },
+  receiptInfoItem: { flex: 1, flexDirection: "column", gap: 2 },
+  receiptInfoLabel: { fontSize: 10, fontWeight: "700", textTransform: "uppercase" },
+  receiptInfoValue: { fontSize: 12, fontWeight: "600" },
+  receiptSectionLabel: { fontSize: 10, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 },
+  receiptItemRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 2 },
+  receiptQtyBadge: { width: 28, height: 20, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+  receiptItemName: { flex: 1, fontSize: 13, fontWeight: "600" },
+  receiptItemPrice: { fontSize: 13, fontWeight: "700" },
+  receiptDashed: { borderTopWidth: 1, borderStyle: "dashed", marginVertical: SPACING.md, marginHorizontal: SPACING.lg },
+  receiptTotalRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  receiptGrandTotal: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: SPACING.md, borderRadius: RADII.md, borderWidth: 1.5, marginVertical: SPACING.sm },
+  receiptFooter: { paddingVertical: SPACING.md, paddingHorizontal: SPACING.lg, borderTopWidth: 1 },
 });
