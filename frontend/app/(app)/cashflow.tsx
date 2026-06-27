@@ -174,6 +174,7 @@ export default function CashFlowScreen() {
 
       <Modal visible={!!editing} transparent animationType="slide" onRequestClose={() => setEditing(null)}>
         <CashForm
+          key={editing?.id ?? `new-${editing?.type}`}
           value={editing}
           onClose={() => setEditing(null)}
           onSaved={async (v) => {

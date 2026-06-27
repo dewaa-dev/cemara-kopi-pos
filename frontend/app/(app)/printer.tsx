@@ -719,9 +719,15 @@ export default function PrinterScreen() {
         refreshControl={
           <RefreshControl
             refreshing={isRefreshing}
-            onRefresh={() => {
+            onRefresh={async () => {
               setIsRefreshing(true);
-              refreshState().finally(() => setIsRefreshing(false));
+              try {
+                await refreshState();
+              } catch (e) {
+                console.error("[PrinterScreen] onRefresh error:", e);
+              } finally {
+                setIsRefreshing(false);
+              }
             }}
             tintColor={c.brand}
           />

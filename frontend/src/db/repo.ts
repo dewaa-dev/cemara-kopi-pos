@@ -158,7 +158,9 @@ export async function upsertProduct(p: Partial<Product> & { name: string }) {
 
 export async function deleteProduct(id: string) {
   const d = await getDb();
-  await d.runAsync("DELETE FROM products WHERE id=?", [id]);
+  // FIX: soft delete agar produk yang sudah ada di transaction_items tidak hilang referensinya
+  // Set active=0 alih-alih DELETE
+  await d.runAsync("UPDATE products SET active=0 WHERE id=?", [id]);
 }
 
 // ----- SETTINGS -----
@@ -204,7 +206,12 @@ export async function createTransaction(params: {
   const d = await getDb();
   const id = `tx_${uid()}`;
   const now = new Date();
-  const yyyymmdd = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
+
+  // FIX: gunakan waktu WIB untuk kode invoice agar tanggal sesuai ekspektasi kasir
+  const WIB_OFFSET_MS = 7 * 60 * 60 * 1000;
+  const wibNow = new Date(now.getTime() + WIB_OFFSET_MS);
+  const yyyymmdd = `${wibNow.getUTCFullYear()}${String(wibNow.getUTCMonth() + 1).padStart(2, "0")}${String(wibNow.getUTCDate()).padStart(2, "0")}`;
+
   let subtotal = 0;
   params.cart.forEach((c) => {
     subtotal += c.price * c.qty;
@@ -293,7 +300,7 @@ export async function listTransactions(opts?: {
   if (opts?.to) { where.push("created_at <= ?"); args.push(opts.to); }
   if (opts?.status && opts.status !== "all") { where.push("status = ?"); args.push(opts.status); }
   if (opts?.search && opts.search.trim()) {
-    where.push("(LOWER(code) LIKE ? OR LOWER(customer_name) LIKE ?)");
+    where.push("(LOWER(code) LIKE ? OR LOWER(COALESCE(customer_name,'')) LIKE ?)");
     args.push(`%${opts.search.toLowerCase()}%`, `%${opts.search.toLowerCase()}%`);
   }
   const w = where.length ? `WHERE ${where.join(" AND ")}` : "";
@@ -311,6 +318,14 @@ export async function voidTransaction(params: {
 }): Promise<void> {
   const d = await getDb();
   await d.withTransactionAsync(async () => {
+    // Cek dulu apakah transaksi sudah VOID
+    const tx = await d.getFirstAsync<{ status: string }>(
+      "SELECT status FROM transactions WHERE id=?",
+      [params.transactionId]
+    );
+    if (tx?.status === "VOID") {
+      throw new Error("Transaksi sudah dalam status VOID");
+    }
     const items = await d.getAllAsync<TxItem>(
       "SELECT * FROM transaction_items WHERE transaction_id=?",
       [params.transactionId]
@@ -342,7 +357,6 @@ export async function getTransactionItems(txId: string): Promise<TxItem[]> {
 }
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
-// ─── DASHBOARD ────────────────────────────────────────────────────────────────
 export async function dashboardSummary(): Promise<{
   todayCount: number;
   todayRevenue: number;
@@ -356,21 +370,13 @@ export async function dashboardSummary(): Promise<{
   const WIB_OFFSET_MS = 7 * 60 * 60 * 1000;
   const now = new Date();
 
-  // ✅ FIX: hitung boundary "tengah malam WIB" lalu konversi BALIK ke instant UTC,
-  // dan format sebagai ISO string dengan suffix "Z" (bukan +07:00).
-  // Ini WAJIB supaya perbandingan string lexicographic di SQLite konsisten,
-  // karena created_at di DB juga tersimpan dalam format UTC "Z".
-  // (String "+07:00" vs "Z" TIDAK sortable terhadap satu sama lain meskipun
-  // merepresentasikan instant yang sama — itu bug sebelumnya.)
   function wibMidnightToUtcIso(localNow: Date, daysOffset: number): string {
-    // geser waktu ke "jam dinding WIB" dengan menambah offset ke UTC time
     const wibWallClock = new Date(localNow.getTime() + WIB_OFFSET_MS);
     const y = wibWallClock.getUTCFullYear();
     const m = wibWallClock.getUTCMonth();
     const dd = wibWallClock.getUTCDate() + daysOffset;
-    // tengah malam WIB pada tanggal tsb, dikonversi balik ke instant UTC asli
     const utcInstant = new Date(Date.UTC(y, m, dd, 0, 0, 0) - WIB_OFFSET_MS);
-    return utcInstant.toISOString(); // -> format "...Z", konsisten dgn created_at
+    return utcInstant.toISOString();
   }
 
   const startOfDayWIB = wibMidnightToUtcIso(now, 0);
