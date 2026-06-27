@@ -11,7 +11,6 @@ import {
   Platform,
   FlatList,
   ActivityIndicator,
-  Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
@@ -66,22 +65,9 @@ export default function Products() {
   }, [search, activeCat, load]);
 
   const onDelete = async (p: Product) => {
-    Alert.alert(
-      "Hapus Produk?",
-      `"${p.name}" akan dinonaktifkan. Data transaksi lama tetap aman.`,
-      [
-        { text: "Batal", style: "cancel" },
-        {
-          text: "Hapus",
-          style: "destructive",
-          onPress: async () => {
-            await deleteProduct(p.id);
-            toast.show("Produk dihapus", "success");
-            load();
-          },
-        },
-      ]
-    );
+    await deleteProduct(p.id);
+    toast.show("Produk dihapus", "success");
+    load();
   };
 
   return (

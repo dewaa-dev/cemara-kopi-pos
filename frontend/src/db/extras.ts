@@ -82,8 +82,6 @@ export async function deleteCashFlow(id: string) {
   await d.runAsync("DELETE FROM cash_flow WHERE id=?", [id]);
 }
 
-// FIX BUG: cashFlowSummary todayIn/todayOut menggunakan UTC midnight local (tanpa WIB offset)
-// sehingga jam 00:00-07:00 WIB ke-exclude. Fix: gunakan midnight WIB → instant UTC.
 export async function cashFlowSummary(): Promise<{
   todayIn: number;
   todayOut: number;
@@ -92,22 +90,15 @@ export async function cashFlowSummary(): Promise<{
   balance: number;
 }> {
   const d = await getDb();
-  const WIB_OFFSET_MS = 7 * 60 * 60 * 1000;
-  const now = new Date();
-  // tengah malam WIB dalam instant UTC
-  const wibWall = new Date(now.getTime() + WIB_OFFSET_MS);
-  const startOfDayWIB = new Date(
-    Date.UTC(wibWall.getUTCFullYear(), wibWall.getUTCMonth(), wibWall.getUTCDate(), 0, 0, 0)
-    - WIB_OFFSET_MS
-  ).toISOString();
-
+  const today = new Date();
+  const s = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString();
   const ti = await d.getFirstAsync<{ s: number }>(
     "SELECT COALESCE(SUM(amount),0) s FROM cash_flow WHERE type='in' AND created_at>=?",
-    [startOfDayWIB]
+    [s]
   );
   const to = await d.getFirstAsync<{ s: number }>(
     "SELECT COALESCE(SUM(amount),0) s FROM cash_flow WHERE type='out' AND created_at>=?",
-    [startOfDayWIB]
+    [s]
   );
   const ai = await d.getFirstAsync<{ s: number }>(
     "SELECT COALESCE(SUM(amount),0) s FROM cash_flow WHERE type='in'"
@@ -115,9 +106,9 @@ export async function cashFlowSummary(): Promise<{
   const ao = await d.getFirstAsync<{ s: number }>(
     "SELECT COALESCE(SUM(amount),0) s FROM cash_flow WHERE type='out'"
   );
-  // Add sales (status NORMAL saja) as cash IN to balance
+  // Add sales as cash IN to balance
   const sales = await d.getFirstAsync<{ s: number }>(
-    "SELECT COALESCE(SUM(total),0) s FROM transactions WHERE status='NORMAL'"
+    "SELECT COALESCE(SUM(total),0) s FROM transactions"
   );
   const inTot = (ai?.s ?? 0) + (sales?.s ?? 0);
   return {
@@ -211,6 +202,7 @@ export type BackupItem = {
 const DB_NAME = "cemara_kopi.db";
 
 async function getDbSourcePath(): Promise<string> {
+  // expo-sqlite stores DB inside documentDirectory/SQLite/<dbname>
   return `${FS.documentDirectory}SQLite/${DB_NAME}`;
 }
 
@@ -274,6 +266,7 @@ export async function createBackup(
   ).padStart(2, "0")}`;
   const fileName = `backup_${stamp}.db`;
   const dest = `${dir}${fileName}`;
+  // Ensure DB is committed
   await d.execAsync("PRAGMA wal_checkpoint(FULL);");
   await FS.copyAsync({ from: src, to: dest });
   const info = await FS.getInfoAsync(dest);
@@ -305,66 +298,98 @@ export async function shareBackup(b: BackupItem) {
   if (await Sharing.isAvailableAsync()) {
     await Sharing.shareAsync(b.file_path, {
       mimeType: "application/x-sqlite3",
-      dialogTitle: "Bagikan File Backup Database",
+      dialogTitle: "Bagikan Backup",
     });
   }
 }
 
 export async function restoreBackup(b: BackupItem) {
+  const d = await getDb();
+  await d.execAsync("PRAGMA wal_checkpoint(FULL);");
+  await d.closeAsync();
   const src = await getDbSourcePath();
+  await FS.deleteAsync(src, { idempotent: true });
   await FS.copyAsync({ from: b.file_path, to: src });
+  // Force re-init next time
+  // @ts-ignore - reset module cache via reset function
+  await import("./database").then((m) => (m as any).__resetForRestore?.());
 }
 
+// Auto backup on app startup if daysSinceLast > 0
 export async function maybeAutoBackup() {
-  try {
-    const d = await getDb();
-    const last = await d.getFirstAsync<{ created_at: string }>(
-      "SELECT created_at FROM backups ORDER BY created_at DESC LIMIT 1"
-    );
-    if (!last) {
+  const s = await backupSummary();
+  if (
+    s.lastBackup === null ||
+    (s.daysSinceLastBackup !== null && s.daysSinceLastBackup >= 1)
+  ) {
+    try {
       await createBackup("auto");
-      return;
+    } catch (e) {
+      console.warn("Auto backup failed", e);
     }
-    const daysSince = Math.floor(
-      (Date.now() - new Date(last.created_at).getTime()) / 86400000
-    );
-    if (daysSince >= 1) await createBackup("auto");
-  } catch {}
+  }
 }
 
+// ============ DB HEALTH ============
 export async function dbHealth(): Promise<{
-  ok: boolean;
-  tables: string[];
-  userCount: number;
-  productCount: number;
-  txCount: number;
+  products: number;
+  categories: number;
+  transactions: number;
+  drafts: number;
+  users: number;
+  cashFlowCount: number;
   dbSizeBytes: number;
-  integrityOk: boolean;
+  lastBackup: string | null;
+  daysSinceLastBackup: number | null;
+  backupCount: number;
+  encryptionStatus: string;
+  overallStatus: "normal" | "warning" | "critical";
+  warnings: string[];
 }> {
   const d = await getDb();
-  const tables = await d.getAllAsync<{ name: string }>(
-    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-  );
-  const users = await d.getFirstAsync<{ c: number }>("SELECT COUNT(*) c FROM users");
-  const products = await d.getFirstAsync<{ c: number }>("SELECT COUNT(*) c FROM products");
-  const txs = await d.getFirstAsync<{ c: number }>("SELECT COUNT(*) c FROM transactions");
-  const integ = await d.getFirstAsync<{ integrity_check: string }>(
-    "PRAGMA integrity_check"
-  );
+  const p = await d.getFirstAsync<{ c: number }>("SELECT COUNT(*) c FROM products");
+  const cat = await d.getFirstAsync<{ c: number }>("SELECT COUNT(*) c FROM categories");
+  const tx = await d.getFirstAsync<{ c: number }>("SELECT COUNT(*) c FROM transactions");
+  const dr = await d.getFirstAsync<{ c: number }>("SELECT COUNT(*) c FROM draft_orders WHERE status='draft'");
+  const us = await d.getFirstAsync<{ c: number }>("SELECT COUNT(*) c FROM users");
+  const cf = await d.getFirstAsync<{ c: number }>("SELECT COUNT(*) c FROM cash_flow");
   const src = await getDbSourcePath();
-  let dbSizeBytes = 0;
+  let size = 0;
   try {
     const info = await FS.getInfoAsync(src);
-    dbSizeBytes = (info as any).size ?? 0;
+    size = (info as any).size ?? 0;
   } catch {}
+  const b = await backupSummary();
+  const warnings: string[] = [];
+  let status: "normal" | "warning" | "critical" = "normal";
+  if (b.daysSinceLastBackup === null) {
+    warnings.push("Belum pernah melakukan backup.");
+    status = "warning";
+  } else if (b.daysSinceLastBackup >= 7) {
+    warnings.push(`Backup terakhir ${b.daysSinceLastBackup} hari lalu.`);
+    status = "critical";
+  } else if (b.daysSinceLastBackup >= 3) {
+    warnings.push(`Backup terakhir ${b.daysSinceLastBackup} hari lalu.`);
+    status = "warning";
+  }
+  if (size > 50 * 1024 * 1024) {
+    warnings.push("Ukuran database > 50MB. Pertimbangkan untuk membersihkan data lama.");
+    if (status !== "critical") status = "warning";
+  }
   return {
-    ok: integ?.integrity_check === "ok",
-    tables: tables.map((t) => t.name),
-    userCount: users?.c ?? 0,
-    productCount: products?.c ?? 0,
-    txCount: txs?.c ?? 0,
-    dbSizeBytes,
-    integrityOk: integ?.integrity_check === "ok",
+    products: p?.c ?? 0,
+    categories: cat?.c ?? 0,
+    transactions: tx?.c ?? 0,
+    drafts: dr?.c ?? 0,
+    users: us?.c ?? 0,
+    cashFlowCount: cf?.c ?? 0,
+    dbSizeBytes: size,
+    lastBackup: b.lastBackup,
+    daysSinceLastBackup: b.daysSinceLastBackup,
+    backupCount: b.count,
+    encryptionStatus: "Aktif (Android Sandbox + Internal Storage)",
+    overallStatus: status,
+    warnings,
   };
 }
 
@@ -378,20 +403,18 @@ export async function exportReportPdf(opts: {
   storeName: string;
 }) {
   const txs = await listTransactions({ from: opts.from, to: opts.to, limit: 1000 });
-  // FIX: hanya hitung transaksi NORMAL untuk total & diskon di PDF laporan
-  const normalTxs = txs.filter((t) => t.status === "NORMAL");
-  const total = normalTxs.reduce((s, t) => s + t.total, 0);
-  const discount = normalTxs.reduce((s, t) => s + t.discount, 0);
+  const total = txs.reduce((s, t) => s + t.total, 0);
+  const discount = txs.reduce((s, t) => s + t.discount, 0);
   const rows = txs
     .map(
       (t) => `
-    <tr style="${t.status === 'VOID' ? 'opacity:0.55;text-decoration:line-through' : ''}">
+    <tr>
       <td>${new Date(t.created_at).toLocaleString("id-ID")}</td>
       <td>${t.code}</td>
       <td>${t.cashier_name}</td>
       <td>${t.customer_name ?? "-"}</td>
       <td>${t.payment_method}</td>
-      <td style="text-align:right">${t.status === "VOID" ? "<span style='color:#B00020'>VOID</span>" : fmtRp(t.total)}</td>
+      <td style="text-align:right">${fmtRp(t.total)}</td>
     </tr>`
     )
     .join("");
@@ -415,7 +438,7 @@ export async function exportReportPdf(opts: {
       ${rows || "<tr><td colspan='6' style='text-align:center;color:#999'>Tidak ada transaksi</td></tr>"}
     </table>
     <div class="totals">
-      Transaksi Berhasil: ${normalTxs.length} &nbsp;•&nbsp;
+      Total Transaksi: ${txs.length} &nbsp;•&nbsp;
       Diskon: ${fmtRp(discount)} &nbsp;•&nbsp;
       <span>Total Pendapatan: ${fmtRp(total)}</span>
     </div>
@@ -436,14 +459,12 @@ export async function exportReportCsv(opts: {
   periodLabel: string;
 }) {
   const txs = await listTransactions({ from: opts.from, to: opts.to, limit: 5000 });
-  // FIX: tambah kolom Status di CSV agar VOID transactions tanda terlihat
   const header = [
     "Tanggal",
     "No",
     "Kasir",
     "Pelanggan",
     "Metode",
-    "Status",
     "Subtotal",
     "Diskon",
     "Pajak",
@@ -456,20 +477,17 @@ export async function exportReportCsv(opts: {
       t.cashier_name,
       t.customer_name ?? "",
       t.payment_method,
-      t.status,
-      t.status === "NORMAL" ? t.subtotal : 0,
-      t.status === "NORMAL" ? t.discount : 0,
-      t.status === "NORMAL" ? t.tax : 0,
-      t.status === "NORMAL" ? t.total : 0,
+      t.subtotal,
+      t.discount,
+      t.tax,
+      t.total,
     ]
       .map((c) => `"${String(c).replace(/"/g, '""')}"`)
       .join(",")
   );
-  // FIX: tambah BOM agar Excel buka UTF-8 dengan benar (karakter Rp, nama produk Indonesia)
-  const bom = "\uFEFF";
-  const csv = bom + [header.join(","), ...rows].join("\n");
-  const safePeriod = opts.periodLabel.replace(/[^a-zA-Z0-9_]/g, "_");
-  const fileName = `laporan_${safePeriod}.csv`;
+  const csv = [header.join(","), ...rows].join("\n");
+  const fileName = `laporan_${opts.periodLabel.replace(/\s+/g, "_")}.csv`;
+  const dir = await getBackupDir();
   const dest = `${FS.documentDirectory}${fileName}`;
   await FS.writeAsStringAsync(dest, csv, { encoding: "utf8" as any });
   if (await Sharing.isAvailableAsync()) {

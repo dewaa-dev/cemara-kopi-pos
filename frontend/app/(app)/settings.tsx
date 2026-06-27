@@ -213,7 +213,7 @@ export default function Settings() {
             >
               <Text style={styles.modalCtaText}>Lanjut</Text>
             </Pressable>
-            <Pressable testID="reset-step1-cancel" onPress={() => { setResetStep(0); setResetPin(""); }} style={styles.cancelBtn}>
+            <Pressable testID="reset-step1-cancel" onPress={() => setResetStep(0)} style={styles.cancelBtn}>
               <Text style={{ color: c.onSurfaceMuted, fontWeight: "700" }}>Batal</Text>
             </Pressable>
           </View>
@@ -252,7 +252,7 @@ export default function Settings() {
             >
               <Text style={styles.modalCtaText}>Lanjut ke PIN Admin</Text>
             </Pressable>
-            <Pressable testID="reset-step2-cancel" onPress={() => { setResetStep(0); setResetPin(""); }} style={styles.cancelBtn}>
+            <Pressable testID="reset-step2-cancel" onPress={() => setResetStep(0)} style={styles.cancelBtn}>
               <Text style={{ color: c.onSurfaceMuted, fontWeight: "700" }}>Batal</Text>
             </Pressable>
           </View>
@@ -290,7 +290,7 @@ export default function Settings() {
             >
               {resetBusy ? <ActivityIndicator color="#fff" /> : <Text style={styles.modalCtaText}>HAPUS PERMANEN</Text>}
             </Pressable>
-            <Pressable testID="reset-step3-cancel" onPress={() => { setResetStep(0); setResetPin(""); }} style={styles.cancelBtn}>
+            <Pressable testID="reset-step3-cancel" onPress={() => setResetStep(0)} style={styles.cancelBtn}>
               <Text style={{ color: c.onSurfaceMuted, fontWeight: "700" }}>Batal</Text>
             </Pressable>
           </View>

@@ -56,15 +56,9 @@ const SalesChart = ({ data }: { data: DayData[] }) => {
 
   const maxVal = Math.max(...data.map((s) => s.total), 1);
 
-  // FIX: init animated values dengan useMemo agar jumlah selalu sinkron
-  // Ini lebih aman daripada mutate ref langsung karena re-render berurutan
-  const animValsMemo = React.useMemo(
-    () => data.map(() => new Animated.Value(0)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [data.length]
-  );
+  // Init animated values
   if (animVals.current.length !== data.length) {
-    animVals.current = animValsMemo;
+    animVals.current = data.map(() => new Animated.Value(0));
   }
 
   // Animate bars in on mount / data change

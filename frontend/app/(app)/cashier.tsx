@@ -17,7 +17,6 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect } from "expo-router";
-import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { COLORS, FONT, RADII, SHADOW, SPACING, formatRp } from "@/src/theme";
 import {
   CartLine,
@@ -58,7 +57,6 @@ export default function Cashier() {
   const { user } = useAuth();
   const toast = useToast();
 
-  const tabBarHeight = useBottomTabBarHeight();
   const [cats, setCats] = useState<Category[]>([]);
   const [activeCat, setActiveCat] = useState<string>("all");
   const [products, setProducts] = useState<Product[]>([]);
@@ -83,9 +81,6 @@ export default function Cashier() {
   // FIX BUG 3: Pakai ref untuk track apakah sudah init, hindari re-run useFocusEffect
   const initializedRef = useRef(false);
   const debounceRef = useRef<any>(null);
-  // FIX: refs untuk avoid stale closure di setTimeout callback
-  const activeCatRef = useRef<string>("all");
-  const searchRef = useRef<string>("");
 
   // FIX BUG 2: loadProducts dibuat stabil, tidak bergantung pada state yang berubah-ubah
   const loadProducts = useCallback(async (cat: string, q: string) => {
@@ -201,10 +196,6 @@ export default function Cashier() {
   const change      = Math.max(0, paidVal - total);
   const totalItems  = cart.reduce((s, l) => s + l.qty, 0);
 
-  // Sync refs saat state berubah
-  useEffect(() => { activeCatRef.current = activeCat; }, [activeCat]);
-  useEffect(() => { searchRef.current = search; }, [search]);
-
   const removeLine = (idx: number) => setCart((p) => p.filter((_, i) => i !== idx));
   const incLine    = (idx: number) => setCart((p) => p.map((l, i) => (i === idx ? { ...l, qty: l.qty + 1 } : l)));
   const decLine    = (idx: number) =>
@@ -313,7 +304,7 @@ export default function Cashier() {
       // FIX BUG 2: Reload produk setelah transaksi untuk update stok
       // Delay sedikit agar DB selesai commit dulu
       setTimeout(() => {
-        loadProducts(activeCatRef.current, searchRef.current);
+        loadProducts(activeCat, search);
       }, 500);
 
     } catch (e: any) {
@@ -405,7 +396,7 @@ export default function Cashier() {
         <Pressable
           testID="cart-summary-bar"
           onPress={() => setShowCheckout(true)}
-          style={[styles.cartBar, { backgroundColor: c.brand, bottom: tabBarHeight + 10 }]}
+          style={[styles.cartBar, { backgroundColor: c.brand }]}
           android_ripple={{ color: "rgba(255,255,255,0.18)" }}
         >
           <View style={styles.cartBubble}>
@@ -983,7 +974,7 @@ const styles = StyleSheet.create({
   },
   addBtnText: { fontSize: 12, fontWeight: "700" },
   cartBar: {
-    position: "absolute",
+    position: "absolute", bottom: Platform.OS === "ios" ? 100 : 76,
     left: SPACING.lg, right: SPACING.lg,
     height: 56, borderRadius: RADII.pill,
     flexDirection: "row", alignItems: "center",

@@ -50,13 +50,7 @@ export default function Login() {
 
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-      <ImageBackground
-        source={{ uri: BG_URL }}
-        style={styles.bg}
-        resizeMode="cover"
-        // FIX: graceful fallback jika gambar gagal load (mode offline / no internet)
-        onError={() => { /* ImageBackground tetap render, overlay gradient tetap tampil */ }}
-      >
+      <ImageBackground source={{ uri: BG_URL }} style={styles.bg} resizeMode="cover">
         <LinearGradient
           colors={["rgba(46,125,50,0.35)", "rgba(78,52,46,0.85)", "#3B221C"]}
           locations={[0, 0.55, 1]}
@@ -103,8 +97,6 @@ export default function Login() {
                 placeholder="Password"
                 placeholderTextColor={c.onSurfaceMuted}
                 secureTextEntry={!showPwd}
-                returnKeyType="done"
-                onSubmitEditing={onSubmit}
                 style={[styles.input, { color: c.onSurface }]}
               />
               <Pressable
