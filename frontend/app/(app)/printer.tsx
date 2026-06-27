@@ -701,27 +701,6 @@ export default function PrinterScreen() {
       )}
     </View>
   );
-
-  const renderInfoNote = () => (
-    <View
-      style={[styles.infoNote, { backgroundColor: c.surfaceSecondary }]}
-      testID="info-note"
-    >
-      <MaterialCommunityIcons name="information" size={18} color={c.info} />
-      <Text style={[styles.infoNoteText, { color: c.onSurfaceMuted }]}>
-        Fitur Bluetooth memerlukan{" "}
-        <Text style={{ fontWeight: "700", color: c.info }}>
-          build APK custom via EAS
-        </Text>
-        . Jalankan{" "}
-        <Text style={{ fontWeight: "800" }}>
-          eas build -p android --profile preview
-        </Text>{" "}
-        dari folder frontend, lalu install APK yang dihasilkan.
-      </Text>
-    </View>
-  );
-
   // ============================================================================
   // RENDER
   // ============================================================================
@@ -754,7 +733,6 @@ export default function PrinterScreen() {
         {renderActionButtons()}
         {renderDisconnectButton()}
         {renderDevicesList()}
-        {renderInfoNote()}
       </ScrollView>
     </View>
   );

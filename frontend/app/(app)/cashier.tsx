@@ -46,7 +46,6 @@ const PAY_METHODS = [
   { id: "E-Wallet", icon: "wallet" as const },
 ];
 
-// Icon per kategori
 const getCatIcon = (categoryId: string) => {
   if (categoryId === "cat_minuman") return "coffee";
   if (categoryId === "cat_camilan") return "food-drumstick";
@@ -57,6 +56,7 @@ export default function Cashier() {
   const c = COLORS.light;
   const { user } = useAuth();
   const toast = useToast();
+
   const [cats, setCats] = useState<Category[]>([]);
   const [activeCat, setActiveCat] = useState<string>("all");
   const [products, setProducts] = useState<Product[]>([]);
@@ -78,48 +78,78 @@ export default function Cashier() {
   const [busy, setBusy] = useState(false);
   const [loadedDraftId, setLoadedDraftId] = useState<string | null>(null);
 
+  // FIX BUG 3: Pakai ref untuk track apakah sudah init, hindari re-run useFocusEffect
+  const initializedRef = useRef(false);
   const debounceRef = useRef<any>(null);
 
+  // FIX BUG 2: loadProducts dibuat stabil, tidak bergantung pada state yang berubah-ubah
   const loadProducts = useCallback(async (cat: string, q: string) => {
-    const list = await listProducts({ categoryId: cat, search: q });
-    setProducts(list);
-  }, []);
+    try {
+      const list = await listProducts({ categoryId: cat, search: q });
+      setProducts(list);
+    } catch (e) {
+      console.error("[Cashier] loadProducts error:", e);
+    }
+  }, []); // deps kosong — fungsi ini stabil
 
+  // FIX BUG 3: useFocusEffect HANYA load data statis (categories, toppings, settings, draft)
+  // TIDAK include search/activeCat sebagai deps agar tidak re-run saat user mengetik
   useFocusEffect(
     useCallback(() => {
+      let active = true;
       (async () => {
-        const [cs, tops, sets] = await Promise.all([
-          listCategories(),
-          listToppings(),
-          getSettings(),
-        ]);
-        setCats(cs);
-        setToppings(tops);
-        setTaxPercent(parseFloat(sets.tax_percent || "0"));
-        setStoreName(sets.store_name || "Cemara Kopi");
-        loadProducts(activeCat, search);
-        const raw = await AsyncStorage.getItem(DRAFT_LOAD_KEY);
-        if (raw) {
-          try {
-            const d = JSON.parse(raw);
-            const cartLoaded = JSON.parse(d.cart_json);
-            if (Array.isArray(cartLoaded)) {
-              setCart(cartLoaded);
-              setCustomerName(d.customer_name ?? "");
-              setPhone(d.phone ?? "");
-              setLoadedDraftId(d.id);
-              toast.show(`Draft ${d.customer_name} dimuat`, "success");
-            }
-          } catch {}
-          await AsyncStorage.removeItem(DRAFT_LOAD_KEY);
+        try {
+          const [cs, tops, sets] = await Promise.all([
+            listCategories(),
+            listToppings(),
+            getSettings(),
+          ]);
+          if (!active) return;
+          setCats(cs);
+          setToppings(tops);
+          setTaxPercent(parseFloat(sets.tax_percent || "0"));
+          setStoreName(sets.store_name || "Cemara Kopi");
+
+          // Load produk hanya saat pertama focus (bukan setiap re-focus)
+          if (!initializedRef.current) {
+            initializedRef.current = true;
+            await loadProducts("all", "");
+          }
+
+          // Load draft jika ada
+          const raw = await AsyncStorage.getItem(DRAFT_LOAD_KEY);
+          if (raw && active) {
+            try {
+              const d = JSON.parse(raw);
+              const cartLoaded = JSON.parse(d.cart_json);
+              if (Array.isArray(cartLoaded)) {
+                setCart(cartLoaded);
+                setCustomerName(d.customer_name ?? "");
+                setPhone(d.phone ?? "");
+                setLoadedDraftId(d.id);
+                toast.show(`Draft ${d.customer_name} dimuat`, "success");
+              }
+            } catch {}
+            await AsyncStorage.removeItem(DRAFT_LOAD_KEY);
+          }
+        } catch (e) {
+          console.error("[Cashier] useFocusEffect error:", e);
         }
       })();
-    }, [activeCat, search, loadProducts, toast])
+
+      return () => { active = false; };
+    }, [loadProducts, toast]) // FIX: hapus activeCat & search dari deps
   );
 
+  // FIX BUG 3: Debounce search & category change — reload produk saat filter berubah
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => loadProducts(activeCat, search), 220);
+    debounceRef.current = setTimeout(() => {
+      loadProducts(activeCat, search);
+    }, 220);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
   }, [search, activeCat, loadProducts]);
 
   const addToCart = (p: Product) => {
@@ -143,12 +173,9 @@ export default function Cashier() {
     toast.show(`+ ${p.name}`, "success");
   };
 
-  // Hitung qty produk di cart (untuk badge)
   const cartQtyMap = useMemo(() => {
     const map: Record<string, number> = {};
-    cart.forEach((l) => {
-      map[l.productId] = (map[l.productId] || 0) + l.qty;
-    });
+    cart.forEach((l) => { map[l.productId] = (map[l.productId] || 0) + l.qty; });
     return map;
   }, [cart]);
 
@@ -162,66 +189,130 @@ export default function Cashier() {
   }, [cart]);
 
   const discountVal = Math.max(0, parseFloat(discount) || 0);
-  const afterDisc = Math.max(0, subtotal - discountVal);
-  const taxVal = Math.round((afterDisc * taxPercent) / 100);
-  const total = afterDisc + taxVal;
-  const paidVal = parseFloat(paid) || 0;
-  const change = Math.max(0, paidVal - total);
-  const totalItems = cart.reduce((s, l) => s + l.qty, 0);
+  const afterDisc   = Math.max(0, subtotal - discountVal);
+  const taxVal      = Math.round((afterDisc * taxPercent) / 100);
+  const total       = afterDisc + taxVal;
+  const paidVal     = parseFloat(paid) || 0;
+  const change      = Math.max(0, paidVal - total);
+  const totalItems  = cart.reduce((s, l) => s + l.qty, 0);
 
   const removeLine = (idx: number) => setCart((p) => p.filter((_, i) => i !== idx));
-  const incLine = (idx: number) =>
-    setCart((p) => p.map((l, i) => (i === idx ? { ...l, qty: l.qty + 1 } : l)));
-  const decLine = (idx: number) =>
+  const incLine    = (idx: number) => setCart((p) => p.map((l, i) => (i === idx ? { ...l, qty: l.qty + 1 } : l)));
+  const decLine    = (idx: number) =>
     setCart((p) =>
       p.map((l, i) => (i === idx ? { ...l, qty: l.qty - 1 } : l)).filter((l) => l.qty > 0)
     );
 
+  // FIX BUG 1: onSaveDraft sekarang memberi feedback jelas kenapa tidak bisa dipencet
   const onSaveDraft = async () => {
-    if (!cart.length) { toast.show("Keranjang kosong", "error"); return; }
-    if (!customerName.trim()) { toast.show("Isi nama pelanggan dulu", "error"); return; }
-    await saveDraft({
-      id: loadedDraftId ?? undefined,
-      customer_name: customerName.trim(),
-      phone: phone || undefined,
-      total,
-      cart_json: JSON.stringify(cart),
-      cashier_id: user?.id,
-      cashier_name: user?.name,
-    });
-    setCart([]); setDiscount("0"); setCustomerName(""); setPhone("");
-    setLoadedDraftId(null); setShowCheckout(false);
-    toast.show("Draft tersimpan", "success");
-  };
-
-  const submitOrder = async () => {
-    if (!cart.length) return;
-    if (payMethod === "Tunai" && paidVal < total) {
-      toast.show("Nominal pembayaran kurang", "error"); return;
+    if (!cart.length) {
+      toast.show("Keranjang kosong", "error");
+      return;
+    }
+    // FIX: tunjukkan alert yang jelas, bukan diam-diam return
+    if (!customerName.trim()) {
+      Alert.alert(
+        "Nama Pelanggan Kosong",
+        "Isi nama pelanggan dulu sebelum menyimpan draft.",
+        [{ text: "OK", style: "default" }]
+      );
+      return;
     }
     setBusy(true);
     try {
-      const res = await createTransaction({
-        cart, discount: discountVal, tax_percent: taxPercent,
-        paid: payMethod === "Tunai" ? paidVal : total,
-        payment_method: payMethod, customer_name: customerName || undefined,
-        cashier_id: user!.id, cashier_name: user!.name,
+      await saveDraft({
+        id: loadedDraftId ?? undefined,
+        customer_name: customerName.trim(),
+        phone: phone || undefined,
+        total,
+        cart_json: JSON.stringify(cart),
+        cashier_id: user?.id,
+        cashier_name: user?.name,
       });
+      setCart([]); setDiscount("0"); setCustomerName(""); setPhone("");
+      setLoadedDraftId(null); setShowCheckout(false);
+      toast.show("Draft tersimpan", "success");
+    } catch (e: any) {
+      toast.show("Gagal simpan draft: " + (e?.message || ""), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // FIX BUG 2: submitOrder dengan error handling yang lebih robust
+  const submitOrder = async () => {
+    if (!cart.length) return;
+    if (payMethod === "Tunai" && paidVal < total) {
+      toast.show("Nominal pembayaran kurang", "error");
+      return;
+    }
+    setBusy(true);
+    try {
       const finalPaid = payMethod === "Tunai" ? paidVal : total;
       const finalChange = Math.max(0, finalPaid - total);
-      setShowReceipt({
-        ...res, cart, subtotal, discount: discountVal, tax: taxVal, total,
-        paid: finalPaid, change: finalChange,
-        payment_method: payMethod, paymentMethod: payMethod,
-        customer_name: customerName, store: storeName, cashier: user!.name, date: new Date(),
+
+      // FIX BUG 2: Snapshot cart SEBELUM di-clear, hindari race condition
+      const cartSnapshot = [...cart];
+      const subtotalSnapshot = subtotal;
+      const taxSnapshot = taxVal;
+      const totalSnapshot = total;
+
+      const res = await createTransaction({
+        cart: cartSnapshot,
+        discount: discountVal,
+        tax_percent: taxPercent,
+        paid: finalPaid,
+        payment_method: payMethod,
+        customer_name: customerName || undefined,
+        cashier_id: user!.id,
+        cashier_name: user!.name,
       });
-      setCart([]); setDiscount("0"); setCustomerName(""); setPhone(""); setPaid("");
+
+      // Clear form DULU sebelum set receipt
+      setCart([]);
+      setDiscount("0");
+      setCustomerName("");
+      setPhone("");
+      setPaid("");
       setShowCheckout(false);
-      if (loadedDraftId) { await markDraftPaid(loadedDraftId); setLoadedDraftId(null); }
+
+      if (loadedDraftId) {
+        await markDraftPaid(loadedDraftId);
+        setLoadedDraftId(null);
+      }
+
+      // Set receipt SETELAH clear agar tidak ada state conflict
+      setShowReceipt({
+        code:           res.code,
+        store:          storeName,
+        cashier:        user!.name,
+        date:           new Date(),
+        customer_name:  customerName || "",
+        payment_method: payMethod,
+        paymentMethod:  payMethod,
+        cart:           cartSnapshot,
+        subtotal:       subtotalSnapshot,
+        discount:       discountVal,
+        tax:            taxSnapshot,
+        total:          totalSnapshot,
+        paid:           finalPaid,
+        change:         finalChange,
+      });
+
       toast.show("Transaksi sukses", "success");
+
+      // FIX BUG 2: Reload produk setelah transaksi untuk update stok
+      // Delay sedikit agar DB selesai commit dulu
+      setTimeout(() => {
+        loadProducts(activeCat, search);
+      }, 500);
+
     } catch (e: any) {
+      console.error("[Cashier] submitOrder error:", e);
       toast.show("Gagal: " + (e?.message || "error"), "error");
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -233,7 +324,6 @@ export default function Cashier() {
             <Text style={styles.title}>Kasir</Text>
             <Text style={styles.subtitle}>{storeName}</Text>
           </View>
-          {/* Cart quick-access badge di header */}
           {cart.length > 0 && (
             <Pressable
               onPress={() => setShowCheckout(true)}
@@ -248,7 +338,6 @@ export default function Cashier() {
           )}
         </View>
 
-        {/* Search */}
         <View style={[styles.searchWrap, { backgroundColor: c.surfaceSecondary }]}>
           <MaterialCommunityIcons name="magnify" size={18} color={c.onSurfaceMuted} />
           <TextInput
@@ -266,7 +355,6 @@ export default function Cashier() {
           )}
         </View>
 
-        {/* Category chips */}
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -281,7 +369,6 @@ export default function Cashier() {
         </ScrollView>
       </SafeAreaView>
 
-      {/* Product grid */}
       <FlatList
         data={products}
         numColumns={2}
@@ -289,14 +376,12 @@ export default function Cashier() {
         columnWrapperStyle={{ gap: SPACING.md }}
         contentContainerStyle={styles.gridContent}
         showsVerticalScrollIndicator={false}
+        // FIX BUG 3: removeClippedSubviews false agar tidak ada item hilang saat scroll
+        removeClippedSubviews={false}
         renderItem={({ item }) => {
           const qtyInCart = cartQtyMap[item.id] || 0;
           return (
-            <ProductCard
-              item={item}
-              qtyInCart={qtyInCart}
-              onPress={() => addToCart(item)}
-            />
+            <ProductCard item={item} qtyInCart={qtyInCart} onPress={() => addToCart(item)} />
           );
         }}
         ListEmptyComponent={
@@ -307,7 +392,6 @@ export default function Cashier() {
         }
       />
 
-      {/* Sticky cart bar */}
       {cart.length > 0 && (
         <Pressable
           testID="cart-summary-bar"
@@ -327,7 +411,8 @@ export default function Cashier() {
       {/* Topping modal */}
       <Modal visible={!!toppingFor} animationType="slide" transparent onRequestClose={() => setToppingFor(null)}>
         <ToppingPicker
-          product={toppingFor} toppings={toppings}
+          product={toppingFor}
+          toppings={toppings}
           onClose={() => setToppingFor(null)}
           onAdd={(qty, sel) => {
             if (!toppingFor) return;
@@ -363,18 +448,11 @@ export default function Cashier() {
 }
 
 // ─── ProductCard ─────────────────────────────────────────────────────────────
-const ProductCard = React.memo(({
-  item,
-  qtyInCart,
-  onPress,
-}: {
-  item: Product;
-  qtyInCart: number;
-  onPress: () => void;
+const ProductCard = React.memo(({ item, qtyInCart, onPress }: {
+  item: Product; qtyInCart: number; onPress: () => void;
 }) => {
   const c = COLORS.light;
   const isLowStock = item.stock <= item.min_stock;
-
   return (
     <Pressable
       testID={`product-card-${item.id}`}
@@ -382,48 +460,29 @@ const ProductCard = React.memo(({
       android_ripple={{ color: c.brandSoft }}
       style={[styles.productCard, { backgroundColor: c.surfaceSecondary }]}
     >
-      {/* Qty badge jika sudah ada di cart */}
       {qtyInCart > 0 && (
         <View style={[styles.qtyBadge, { backgroundColor: c.brand }]}>
           <Text style={styles.qtyBadgeText}>{qtyInCart}</Text>
         </View>
       )}
-
-      {/* Stok rendah badge */}
       {isLowStock && (
         <View style={styles.stockBadge}>
           <Text style={styles.stockBadgeText}>Stok {item.stock}</Text>
         </View>
       )}
-
-      {/* Thumb icon */}
-      <View style={[
-        styles.thumb,
-        { backgroundColor: qtyInCart > 0 ? c.brandSoft : c.surfaceTertiary }
-      ]}>
+      <View style={[styles.thumb, { backgroundColor: qtyInCart > 0 ? c.brandSoft : c.surfaceTertiary }]}>
         <MaterialCommunityIcons
           name={getCatIcon(item.category_id)}
           size={32}
           color={qtyInCart > 0 ? c.brand : c.onSurfaceMuted}
         />
       </View>
-
-      {/* Nama & harga */}
-      <Text style={[styles.prodName, { color: c.onSurface }]} numberOfLines={2}>
-        {item.name}
-      </Text>
-      <Text style={[styles.prodPrice, { color: c.brand }]}>
-        {formatRp(item.sell_price)}
-      </Text>
-
-      {/* Tombol tambah eksplisit */}
-      <View style={[
-        styles.addBtn,
-        { backgroundColor: qtyInCart > 0 ? c.brand : c.brandSoft }
-      ]}>
+      <Text style={[styles.prodName, { color: c.onSurface }]} numberOfLines={2}>{item.name}</Text>
+      <Text style={[styles.prodPrice, { color: c.brand }]}>{formatRp(item.sell_price)}</Text>
+      <View style={[styles.addBtn, { backgroundColor: qtyInCart > 0 ? c.brand : c.brandSoft }]}>
         <MaterialCommunityIcons name="plus" size={16} color={qtyInCart > 0 ? "#fff" : c.brand} />
         <Text style={[styles.addBtnText, { color: qtyInCart > 0 ? "#fff" : c.brand }]}>
-          {qtyInCart > 0 ? `Tambah lagi` : "Tambah"}
+          {qtyInCart > 0 ? "Tambah lagi" : "Tambah"}
         </Text>
       </View>
     </Pressable>
@@ -436,13 +495,8 @@ const Chip = ({ label, active, onPress, testID }: {
 }) => {
   const c = COLORS.light;
   return (
-    <Pressable
-      testID={testID} onPress={onPress}
-      android_ripple={{ color: c.brandSoft }}
-      style={[styles.chip, {
-        backgroundColor: active ? c.brand : c.surfaceSecondary,
-        borderColor: active ? c.brand : c.border,
-      }]}
+    <Pressable testID={testID} onPress={onPress} android_ripple={{ color: c.brandSoft }}
+      style={[styles.chip, { backgroundColor: active ? c.brand : c.surfaceSecondary, borderColor: active ? c.brand : c.border }]}
     >
       <Text style={[styles.chipText, { color: active ? "#fff" : c.onSurface, fontWeight: active ? "800" : "600" }]}>
         {label}
@@ -463,7 +517,6 @@ const ToppingPicker = ({ product, toppings, onClose, onAdd }: {
   const [sel, setSel] = useState<Record<string, number>>({});
 
   useEffect(() => { setQty(1); setSel({}); }, [product?.id]);
-
   if (!product) return null;
 
   const setTopQty = (id: string, q: number) => {
@@ -547,6 +600,10 @@ const CheckoutSheet = (props: any) => {
     onClose, onSubmit, onSaveDraft, incLine, decLine, removeLine,
   } = props;
 
+  // FIX BUG 1: draft button hanya disabled kalau busy atau cart kosong
+  // Validasi nama pelanggan dipindah ke dalam onSaveDraft dengan Alert
+  const draftDisabled = busy || cart.length === 0;
+
   return (
     <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.modalBg}>
       <View style={[styles.modalSheet, { backgroundColor: c.surface, height: "92%" }]}>
@@ -581,10 +638,12 @@ const CheckoutSheet = (props: any) => {
             </View>
           ))}
 
+          {/* FIX BUG 1: Hint nama pelanggan wajib untuk draft */}
           <Text style={[styles.section, { color: c.onSurfaceMuted }]}>Detail Pelanggan</Text>
           <TextInput
             testID="checkout-customer-name" value={customerName} onChangeText={setCustomerName}
-            placeholder="Nama pelanggan (wajib untuk draft)" placeholderTextColor={c.onSurfaceMuted}
+            placeholder="Nama pelanggan (wajib untuk simpan draft)"
+            placeholderTextColor={c.onSurfaceMuted}
             style={[styles.input, { borderColor: c.border, color: c.onSurface }]}
           />
           <TextInput
@@ -643,29 +702,45 @@ const CheckoutSheet = (props: any) => {
         </ScrollView>
 
         <View style={{ flexDirection: "row", gap: 8 }}>
+          {/* FIX BUG 1: disabled hanya saat busy/kosong, bukan saat nama kosong */}
           <Pressable
-            testID="checkout-save-draft" disabled={busy || cart.length === 0} onPress={onSaveDraft}
+            testID="checkout-save-draft"
+            disabled={draftDisabled}
+            onPress={onSaveDraft}
             android_ripple={{ color: c.brandSoft }}
             style={[styles.modalCta, {
-              flex: 1, backgroundColor: c.surfaceSecondary,
-              borderWidth: 1.5, borderColor: c.brand,
-              opacity: busy || cart.length === 0 ? 0.6 : 1,
+              flex: 1,
+              backgroundColor: c.surfaceSecondary,
+              borderWidth: 1.5,
+              borderColor: c.brand,
+              opacity: draftDisabled ? 0.6 : 1,
             }]}
           >
-            <Text style={[styles.modalCtaText, { color: c.brand }]}>
-              {loadedDraftId ? "Update Draft" : "Simpan Draft"}
-            </Text>
+            {busy ? (
+              <ActivityIndicator color={c.brand} size="small" />
+            ) : (
+              <Text style={[styles.modalCtaText, { color: c.brand }]}>
+                {loadedDraftId ? "Update Draft" : "Simpan Draft"}
+              </Text>
+            )}
           </Pressable>
           <Pressable
-            testID="checkout-pay-button" disabled={busy || cart.length === 0} onPress={onSubmit}
+            testID="checkout-pay-button"
+            disabled={busy || cart.length === 0}
+            onPress={onSubmit}
             android_ripple={{ color: "rgba(255,255,255,0.18)" }}
             style={[styles.modalCta, {
-              flex: 1.4, backgroundColor: c.brand,
+              flex: 1.4,
+              backgroundColor: c.brand,
               opacity: busy || cart.length === 0 ? 0.6 : 1,
             }]}
           >
-            {busy ? <ActivityIndicator color="#fff" /> : (
-              <Text style={styles.modalCtaText} numberOfLines={1}>Bayar • {formatRp(total)}</Text>
+            {busy ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.modalCtaText} numberOfLines={1}>
+                Bayar • {formatRp(total)}
+              </Text>
             )}
           </Pressable>
         </View>
@@ -692,11 +767,7 @@ const ReceiptView = ({ data, onClose }: { data: any; onClose: () => void }) => {
   const c = COLORS.light;
   const toast = useToast();
   const [printing, setPrinting] = useState(false);
-  // ✅ FIX #2: error cetak sekarang PERSIST di dalam modal (tidak cuma toast
-  // yang hilang sendiri), supaya kasir tidak kelewat lihat kalau struk gagal cetak.
   const [printError, setPrintError] = useState<string | null>(null);
-  // ✅ Lacak apakah struk SUDAH pernah berhasil dicetak di sesi modal ini,
-  // dipakai untuk menentukan apakah perlu konfirmasi sebelum "Selesai".
   const [hasPrintedOnce, setHasPrintedOnce] = useState(false);
 
   if (!data) return null;
@@ -708,18 +779,29 @@ const ReceiptView = ({ data, onClose }: { data: any; onClose: () => void }) => {
       const def = await getDefaultPrinter();
       const paper: PaperSize = def?.paperSize ?? "58mm";
       const result = await printReceipt({
-        storeName: data.store, invoiceCode: data.code,
-        dateTime: new Date(data.date).toLocaleString("id-ID"),
-        cashierName: data.cashier, customerName: data.customer_name,
+        storeName:     data.store,
+        invoiceCode:   data.code,
+        dateTime:      new Date(data.date).toLocaleString("id-ID"),
+        cashierName:   data.cashier,
+        customerName:  data.customer_name,
         paymentMethod: data.paymentMethod,
         lines: data.cart.map((l: CartLine) => ({
-          productName: l.productName, qty: l.qty, price: l.price,
-          toppings: l.toppings.map((t) => ({ productName: t.productName, qty: t.qty, price: t.price })),
+          productName: l.productName,
+          qty:         l.qty,
+          price:       l.price,
+          toppings:    l.toppings.map((t) => ({
+            productName: t.productName, qty: t.qty, price: t.price,
+          })),
         })),
-        subtotal: data.subtotal, discount: data.discount, tax: data.tax,
-        total: data.total, paid: data.paid, change: data.change,
-        footer: "Terima kasih telah berkunjung. Semoga harimu menyenangkan",
+        subtotal: data.subtotal,
+        discount: data.discount,
+        tax:      data.tax,
+        total:    data.total,
+        paid:     data.paid,
+        change:   data.change,
+        footer:   "Terima kasih telah berkunjung. Semoga harimu menyenangkan",
       }, paper);
+
       if (result.ok) {
         toast.show("Struk dicetak", "success");
         setHasPrintedOnce(true);
@@ -733,23 +815,19 @@ const ReceiptView = ({ data, onClose }: { data: any; onClose: () => void }) => {
       const msg = "Gagal cetak: " + (e?.message || "");
       toast.show(msg, "error");
       setPrintError(msg);
-    } finally { setPrinting(false); }
+    } finally {
+      setPrinting(false);
+    }
   };
 
-  // ✅ FIX #1: "Selesai" sekarang minta konfirmasi kalau struk BELUM pernah
-  // berhasil dicetak di sesi ini, supaya kasir tidak reflex menutup modal
-  // dan lupa kalau struknya belum ke-print sama sekali.
   const onRequestClose = () => {
-    if (hasPrintedOnce) {
-      onClose();
-      return;
-    }
+    if (hasPrintedOnce) { onClose(); return; }
     Alert.alert(
       "Belum cetak struk?",
-      "Struk untuk transaksi ini belum pernah berhasil dicetak. Tutup tanpa cetak?",
+      "Struk belum berhasil dicetak. Tutup tanpa cetak?",
       [
         { text: "Cetak Dulu", style: "cancel" },
-        { text: "Tutup Tanpa Cetak", style: "destructive", onPress: onClose },
+        { text: "Tutup", style: "destructive", onPress: onClose },
       ]
     );
   };
@@ -776,7 +854,9 @@ const ReceiptView = ({ data, onClose }: { data: any; onClose: () => void }) => {
                 {l.toppings.map((t) => (
                   <View key={t.productId} style={styles.rRow}>
                     <Text style={{ color: c.onSurfaceMuted, flex: 1, fontSize: 12 }}>+ {t.productName} x{t.qty}</Text>
-                    <Text style={{ color: c.onSurfaceMuted, width: 80, textAlign: "right", fontSize: 12 }}>{formatRp(t.price * t.qty * l.qty)}</Text>
+                    <Text style={{ color: c.onSurfaceMuted, width: 80, textAlign: "right", fontSize: 12 }}>
+                      {formatRp(t.price * t.qty * l.qty)}
+                    </Text>
                   </View>
                 ))}
               </View>
@@ -795,22 +875,16 @@ const ReceiptView = ({ data, onClose }: { data: any; onClose: () => void }) => {
           </View>
         </ScrollView>
 
-        {/* ✅ FIX #2: banner error persist (tidak hilang sendiri seperti toast) */}
         {printError && (
           <View style={[styles.printErrorBanner, { borderColor: c.error, backgroundColor: c.error + "14" }]}>
             <MaterialCommunityIcons name="alert-circle" size={18} color={c.error} />
-            <Text style={{ color: c.error, fontSize: 12, flex: 1, fontWeight: "600" }}>
-              {printError}
-            </Text>
+            <Text style={{ color: c.error, fontSize: 12, flex: 1, fontWeight: "600" }}>{printError}</Text>
           </View>
         )}
-
         {hasPrintedOnce && !printError && (
           <View style={[styles.printOkBanner, { backgroundColor: c.success + "14" }]}>
             <MaterialCommunityIcons name="check-circle" size={18} color={c.success} />
-            <Text style={{ color: c.success, fontSize: 12, flex: 1, fontWeight: "600" }}>
-              Struk sudah dicetak
-            </Text>
+            <Text style={{ color: c.success, fontSize: 12, flex: 1, fontWeight: "600" }}>Struk sudah dicetak</Text>
           </View>
         )}
 
@@ -822,9 +896,7 @@ const ReceiptView = ({ data, onClose }: { data: any; onClose: () => void }) => {
             {printing ? <ActivityIndicator color="#fff" /> : (
               <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                 <MaterialCommunityIcons name="printer" size={18} color="#fff" />
-                <Text style={styles.modalCtaText}>
-                  {hasPrintedOnce ? "Cetak Ulang" : "Cetak"}
-                </Text>
+                <Text style={styles.modalCtaText}>{hasPrintedOnce ? "Cetak Ulang" : "Cetak"}</Text>
               </View>
             )}
           </Pressable>
@@ -845,140 +917,68 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   headerBg: { position: "absolute", top: 0, left: 0, right: 0, height: 200 },
   header: {
-    paddingHorizontal: SPACING.lg,
-    paddingTop: SPACING.sm,
-    paddingBottom: 4,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+    paddingHorizontal: SPACING.lg, paddingTop: SPACING.sm, paddingBottom: 4,
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
   },
   title: { color: "#fff", fontSize: 20, fontWeight: "800" },
   subtitle: { color: "rgba(255,255,255,0.85)", fontSize: 12, marginTop: 2 },
-
-  // Cart badge di header
   headerCartBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 44, height: 44, borderRadius: 22,
     backgroundColor: "rgba(255,255,255,0.18)",
-    alignItems: "center",
-    justifyContent: "center",
+    alignItems: "center", justifyContent: "center",
   },
   headerCartBadge: {
-    position: "absolute",
-    top: 4,
-    right: 4,
-    minWidth: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: "#fff",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 3,
+    position: "absolute", top: 4, right: 4,
+    minWidth: 16, height: 16, borderRadius: 8,
+    backgroundColor: "#fff", alignItems: "center", justifyContent: "center", paddingHorizontal: 3,
   },
   headerCartBadgeText: { fontSize: 9, fontWeight: "800", color: COLORS.light.brand },
-
   searchWrap: {
-    marginHorizontal: SPACING.lg,
-    marginTop: SPACING.md,
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: SPACING.md,
-    height: 44,
-    borderRadius: RADII.pill,
-    gap: SPACING.sm,
-    ...SHADOW.card,
+    marginHorizontal: SPACING.lg, marginTop: SPACING.md,
+    flexDirection: "row", alignItems: "center",
+    paddingHorizontal: SPACING.md, height: 44,
+    borderRadius: RADII.pill, gap: SPACING.sm, ...SHADOW.card,
   },
   searchInput: { flex: 1, fontSize: 14 },
   chips: { marginTop: SPACING.sm },
   chipsContent: { paddingHorizontal: SPACING.lg, gap: 8, paddingVertical: 8 },
   chip: {
-    height: 34,
-    flexShrink: 0,
-    paddingHorizontal: 14,
-    borderRadius: RADII.pill,
-    borderWidth: 1,
-    alignItems: "center",
-    justifyContent: "center",
+    height: 34, flexShrink: 0, paddingHorizontal: 14,
+    borderRadius: RADII.pill, borderWidth: 1, alignItems: "center", justifyContent: "center",
   },
   chipText: { fontSize: 13 },
-
-  // Grid
   gridContent: { padding: SPACING.lg, paddingBottom: 140, gap: SPACING.md },
-  productCard: {
-    flex: 1,
-    borderRadius: RADII.md,
-    padding: SPACING.md,
-    ...SHADOW.card,
-    overflow: "hidden",
-  },
-
-  // Qty badge (pojok kiri atas card)
+  productCard: { flex: 1, borderRadius: RADII.md, padding: SPACING.md, ...SHADOW.card, overflow: "hidden" },
   qtyBadge: {
-    position: "absolute",
-    top: 8,
-    left: 8,
-    minWidth: 22,
-    height: 22,
-    borderRadius: 11,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 5,
-    zIndex: 2,
+    position: "absolute", top: 8, left: 8,
+    minWidth: 22, height: 22, borderRadius: 11,
+    alignItems: "center", justifyContent: "center", paddingHorizontal: 5, zIndex: 2,
   },
   qtyBadgeText: { color: "#fff", fontSize: 11, fontWeight: "800" },
-
-  // Stok rendah badge (pojok kanan atas)
   stockBadge: {
-    position: "absolute",
-    top: 8,
-    right: 8,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    backgroundColor: "#FFEDD5",
-    borderRadius: 6,
-    zIndex: 2,
+    position: "absolute", top: 8, right: 8,
+    paddingHorizontal: 6, paddingVertical: 2,
+    backgroundColor: "#FFEDD5", borderRadius: 6, zIndex: 2,
   },
   stockBadgeText: { fontSize: 10, color: "#B26A00", fontWeight: "700" },
-
-  // Thumb area
   thumb: {
-    width: "100%",
-    height: 72,
-    borderRadius: RADII.sm,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: SPACING.sm,
-    marginTop: SPACING.xs,
+    width: "100%", height: 72, borderRadius: RADII.sm,
+    alignItems: "center", justifyContent: "center",
+    marginBottom: SPACING.sm, marginTop: SPACING.xs,
   },
   prodName: { fontSize: 13, fontWeight: "700", lineHeight: 18, minHeight: 36 },
   prodPrice: { fontSize: FONT.sizes.md, fontWeight: "800", marginTop: 2, marginBottom: SPACING.sm },
-
-  // Tombol tambah di dalam card
   addBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 4,
-    borderRadius: RADII.sm,
-    paddingVertical: 7,
-    marginTop: 2,
+    flexDirection: "row", alignItems: "center", justifyContent: "center",
+    gap: 4, borderRadius: RADII.sm, paddingVertical: 7, marginTop: 2,
   },
   addBtnText: { fontSize: 12, fontWeight: "700" },
-
-  // Cart bar
   cartBar: {
-    position: "absolute",
-    bottom: Platform.OS === "ios" ? 100 : 76,
-    left: SPACING.lg,
-    right: SPACING.lg,
-    height: 56,
-    borderRadius: RADII.pill,
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: SPACING.lg,
-    gap: SPACING.md,
-    ...SHADOW.fab,
+    position: "absolute", bottom: Platform.OS === "ios" ? 100 : 76,
+    left: SPACING.lg, right: SPACING.lg,
+    height: 56, borderRadius: RADII.pill,
+    flexDirection: "row", alignItems: "center",
+    paddingHorizontal: SPACING.lg, gap: SPACING.md, ...SHADOW.fab,
   },
   cartBubble: {
     width: 28, height: 28, borderRadius: 14,
@@ -989,8 +989,6 @@ const styles = StyleSheet.create({
   cartBarText: { color: "#fff", flex: 1, fontWeight: "700" },
   cartBarTotal: { color: "#fff", fontWeight: "800", fontSize: 15 },
   emptyList: { paddingVertical: 60, alignItems: "center" },
-
-  // Modal
   modalBg: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
   modalSheet: { borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: SPACING.lg },
   modalHandle: {
@@ -1007,7 +1005,7 @@ const styles = StyleSheet.create({
   },
   modalCta: {
     height: 54, borderRadius: RADII.md, alignItems: "center", justifyContent: "center",
-    marginTop: SPACING.md, overflow: "hidden", ...SHADOW.fab,
+    overflow: "hidden", ...SHADOW.fab,
   },
   modalCtaText: { color: "#fff", fontWeight: "800", fontSize: 15 },
   stepper: { flexDirection: "row", alignItems: "center", gap: 10 },
