@@ -2,14 +2,13 @@ import * as SQLite from "expo-sqlite";
 import { SEED_PRODUCTS, SEED_USERS, SEED_SETTINGS } from "./seed";
 
 let rawDb: SQLite.SQLiteDatabase | null = null;
-// ✅ FIX: lacak Promise inisialisasi yang sedang berjalan, bukan cuma hasil
-// akhirnya. Tanpa ini, kalau dua bagian UI memanggil getDb() hampir
-// bersamaan saat app baru dibuka (misal listProducts + listCategories di
-// useFocusEffect yang sama), masing-masing bisa memicu openDatabaseAsync()
-// SENDIRI-SENDIRI secara paralel sebelum rawDb ke-set — menghasilkan dua
-// handle native yang berebut migrate() & seedIfEmpty() di waktu yang sama.
-// Ini salah satu sumber kerusakan handle native yang berujung
-// NullPointerException di transaksi/akses berikutnya.
+
+// FIX RACE CONDITION: initPromise TIDAK di-reset ke null setelah selesai.
+// Sebelumnya, .finally(() => { initPromise = null }) menyebabkan panggilan
+// getDb() berikutnya dari screen berbeda bisa membuat openDatabaseAsync() kedua
+// saat rawDb belum ter-set (window ~1ms) → dua koneksi native berebut migrate().
+// Sekarang: initPromise hanya di-null-kan JIKA gagal (agar bisa retry),
+// tapi kalau sukses dibiarkan sebagai resolved Promise selamanya (memory minimal).
 let initPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
 async function openAndPrepare(): Promise<SQLite.SQLiteDatabase> {
@@ -29,23 +28,16 @@ async function getRawDb(): Promise<SQLite.SQLiteDatabase> {
       rawDb = instance;
       return instance;
     })
-    .finally(() => {
+    .catch((err) => {
+      // Hanya reset kalau gagal, agar bisa retry
       initPromise = null;
+      rawDb = null;
+      throw err;
     });
 
   return initPromise;
 }
 
-/**
- * ✅ FIX: deteksi error yang menandakan koneksi native sudah rusak/invalid
- * (bukan error query biasa seperti constraint violation atau syntax error).
- * Native SQLite handle yang invalid biasanya melempar NullPointerException
- * atau pesan yang menyebut "NativeDatabase" / "has been rejected" dari sisi
- * Android, karena objek native-nya sudah ter-deallocate tapi referensi JS
- * masih menunjuk ke wrapper lama yang sekarang kosong. Gejala yang muncul
- * di aplikasi: transaksi kedua gagal, menu produk tampil kosong, draft
- * tidak bisa disimpan — semuanya turunan dari handle yang sama rusak.
- */
 function isStaleConnectionError(err: any): boolean {
   const msg = String(err?.message ?? err ?? "");
   return (
@@ -63,8 +55,6 @@ function resetConnection() {
   initPromise = null;
 }
 
-// Method-method SQLiteDatabase yang dipakai di seluruh repo.ts / extras.ts
-// dan butuh proteksi self-healing.
 const GUARDED_METHODS = [
   "execAsync",
   "runAsync",
@@ -74,20 +64,6 @@ const GUARDED_METHODS = [
   "withTransactionAsync",
 ] as const;
 
-/**
- * ✅ FIX UTAMA: getDb() sekarang mengembalikan PROXY di atas instance
- * SQLiteDatabase asli. Setiap kali repo.ts/extras.ts memanggil method
- * seperti d.runAsync(...) atau d.getAllAsync(...), proxy ini:
- *   1. Menjalankan method aslinya seperti biasa.
- *   2. Kalau gagal dengan error yang menandakan koneksi native rusak,
- *      otomatis membuka koneksi BARU dan retry method yang sama SEKALI.
- *   3. Kalau retry juga gagal (atau errornya bukan stale-connection),
- *      error asli dilempar ke pemanggil seperti biasa.
- *
- * Keuntungan pendekatan ini: TIDAK PERLU mengubah 28 titik pemanggilan
- * getDb() yang sudah ada di repo.ts/extras.ts — semua otomatis terlindungi
- * karena proxy ini transparan, terlihat seperti SQLiteDatabase biasa.
- */
 function wrapWithSelfHealing(instance: SQLite.SQLiteDatabase): SQLite.SQLiteDatabase {
   return new Proxy(instance, {
     get(target, prop, receiver) {
@@ -104,15 +80,11 @@ function wrapWithSelfHealing(instance: SQLite.SQLiteDatabase): SQLite.SQLiteData
             if (!isStaleConnectionError(err)) throw err;
 
             console.warn(
-              `[DB] Koneksi native rusak terdeteksi saat memanggil "${String(prop)}", membuka ulang koneksi...`,
+              `[DB] Koneksi native rusak saat "${String(prop)}", membuka ulang...`,
               err
             );
             resetConnection();
             const fresh = await getRawDb();
-            // Retry SEKALI dengan koneksi baru. Method yang sama dipanggil
-            // ulang lewat instance fresh (bukan proxy, untuk hindari rekursi
-            // tak terbatas kalau koneksi baru ternyata juga langsung rusak —
-            // dalam kasus itu error akan naik apa adanya ke pemanggil).
             const freshMethod = (fresh as any)[prop];
             return await freshMethod.apply(fresh, args);
           }
